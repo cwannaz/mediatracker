@@ -224,6 +224,8 @@ CREATE INDEX IF NOT EXISTS scan_run_slug_idx ON scan_run (slug, requested_at DES
 -- Additive column upgrades (safe to run every boot).
 ALTER TABLE article_snapshot ADD COLUMN IF NOT EXISTS source TEXT;   -- news agency (Reuters/AFP/ATS…)
 ALTER TABLE article ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ;    -- when the article stopped being reachable
+ALTER TABLE article ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'live';  -- 'live' | 'pdf'
+ALTER TABLE article ADD COLUMN IF NOT EXISTS source_file TEXT;       -- archival source (e.g. a printed PDF)
 """
 
 
@@ -263,17 +265,20 @@ def upsert_journal(conn, *, jid: str, slug: str, name: str, base_url: str,
 
 
 def upsert_article(conn, *, aid: str, journal_id: str, canonical_url: str,
-                   source_key: str | None = None) -> None:
+                   source_key: str | None = None, origin: str = "live",
+                   source_file: str | None = None) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO article (id, journal_id, canonical_url, source_key)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO article (id, journal_id, canonical_url, source_key, origin, source_file)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET last_seen = now(),
                 gone_at = NULL,  -- successfully re-seen, so no longer gone
-                source_key = COALESCE(EXCLUDED.source_key, article.source_key)
+                source_key = COALESCE(EXCLUDED.source_key, article.source_key),
+                origin = EXCLUDED.origin,
+                source_file = COALESCE(EXCLUDED.source_file, article.source_file)
             """,
-            (aid, journal_id, canonical_url, source_key),
+            (aid, journal_id, canonical_url, source_key, origin, source_file),
         )
 
 

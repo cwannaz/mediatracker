@@ -30,7 +30,8 @@ respect_robots = true
 # Root of the local data lake. blob_dir / jsonl_dir default to sub-dirs of this
 # when left empty. "~" is expanded. Content-addressed images live under blob_dir
 # (blobs/ab/cd/<sha256>.<ext>); the JSONL store is the Postgres-down fallback.
-data_dir = "~/.local/share/mediatracker"
+# Data lake lives on the large ZFS volume (blobs/JSONL and other data files).
+data_dir = "/mnt/storage/Projects/MediaTracker/data"
 blob_dir = ""
 jsonl_dir = ""
 
