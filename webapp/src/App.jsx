@@ -1,85 +1,56 @@
 import { useEffect, useState } from 'react'
 import { useDaemon } from './useDaemon.js'
+import DataSources from './DataSources.jsx'
 
-// Foundation GUI: connects to the daemon and shows live status/health plus a
-// per-journal ingest trigger. The article/thread reproduction views and the
-// author-linkage analysis will be added once the read API and adapters land.
+const TABS = [
+  { id: 'sources', label: 'Data Sources' },
+  { id: 'browser', label: 'Article Browser' },  // built later
+]
+
 export default function App() {
   const { connected, send } = useDaemon()
-  const [status, setStatus] = useState(null)
-  const [health, setHealth] = useState(null)
-  const [busy, setBusy] = useState(null)
-
-  const refresh = async () => {
-    try {
-      setStatus(await send('status'))
-      setHealth(await send('health'))
-    } catch { /* not connected yet */ }
-  }
+  const [tab, setTab] = useState('sources')
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('mt-theme') || 'dark' } catch { return 'dark' }
+  })
 
   useEffect(() => {
-    if (!connected) return
-    refresh()
-    const t = setInterval(refresh, 5000)
-    return () => clearInterval(t)
-  }, [connected])
-
-  const ingest = async (journal) => {
-    setBusy(journal)
-    try { await send('ingest_now', { journal }); await refresh() }
-    finally { setBusy(null) }
-  }
+    document.documentElement.setAttribute('data-theme', theme)
+    try { localStorage.setItem('mt-theme', theme) } catch { /* ignore */ }
+  }, [theme])
 
   return (
-    <div className="wrap">
-      <header>
-        <h1>MediaTracker</h1>
+    <>
+      <header className="topbar">
+        <span className="brand">MediaTracker</span>
+        <nav className="tabs" aria-label="Sections">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              className="tab"
+              aria-current={tab === t.id ? 'page' : undefined}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+        <span className="spacer" />
         <span className={connected ? 'pill ok' : 'pill down'}>
           {connected ? 'daemon connected' : 'daemon offline'}
         </span>
+        <button className="iconbtn" title="Toggle theme"
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+          {theme === 'dark' ? '☾' : '☀'}
+        </button>
       </header>
 
-      {status?.degraded && (
-        <div className="banner warn">
-          Running degraded — Postgres unavailable, writing to the JSONL fallback store.
+      {tab === 'sources' && <DataSources connected={connected} send={send} />}
+      {tab === 'browser' && (
+        <div className="placeholder">
+          The article &amp; comment browser will live here — coming next.
         </div>
       )}
-
-      <section>
-        <h2>Journals</h2>
-        {!status && <p className="muted">Waiting for the daemon…</p>}
-        <ul className="journals">
-          {(status?.journals ?? []).map((j) => {
-            const s = status?.last_stats?.[j]
-            return (
-              <li key={j}>
-                <div className="jhead">
-                  <strong>{j}</strong>
-                  <button disabled={busy === j} onClick={() => ingest(j)}>
-                    {busy === j ? 'ingesting…' : 'Ingest now'}
-                  </button>
-                </div>
-                <div className="muted small">
-                  {s
-                    ? `articles ${s.articles_seen} · snapshots ${s.article_snapshots} · comments ${s.comments_seen} · new images ${s.images_new} · errors ${s.errors}`
-                    : 'no ingest yet'}
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      </section>
-
-      <section>
-        <h2>Health</h2>
-        {health
-          ? <pre className="health">{JSON.stringify(health, null, 2)}</pre>
-          : <p className="muted">—</p>}
-      </section>
-
-      <footer className="muted small">
-        Article reproduction &amp; author-linkage views coming next.
-      </footer>
-    </div>
+    </>
   )
 }

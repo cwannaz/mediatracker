@@ -67,19 +67,40 @@ cd webapp && npm install && npm run dev
 
 The daemon speaks JSON over `ws://127.0.0.1:55030` (project port band 55000–55100):
 
-| cmd          | effect                                          |
-|--------------|-------------------------------------------------|
-| `ping`       | liveness                                        |
-| `health`     | self-verdict (loops, staleness, error counts)   |
-| `status`     | degraded flag, journals, last ingest stats      |
-| `ingest_now` | force an ingest (`{"cmd":"ingest_now","journal":"lematin"}`) |
+| cmd             | effect                                                        |
+|-----------------|--------------------------------------------------------------|
+| `ping`          | liveness                                                     |
+| `health`        | self-verdict (loops, staleness, error counts)                |
+| `status`        | degraded flag, journals, last scan stats                     |
+| `list_sources`  | per-journal schedule, effective base URL, next scan, last run |
+| `update_source` | save a journal's schedule (`{journal, schedule:{…}}`)        |
+| `trigger_scan`  | queue a manual scan now (`{journal}`), no random offset      |
+| `scan_status`   | current scan progress (done/total) + queue length            |
+| `scan_history`  | recent `scan_run` rows (`{journal?, limit}`)                  |
+
+## Scanning model
+
+Each journal has a schedule (start-of-day + period + ±variability jitter,
+timezone) stored in `journal.config` and edited from the GUI. A single-worker
+queue runs scans one at a time (coincident schedules serialize); manual scans
+skip the jitter. Each scan discovers homepage articles **and** re-scans
+recently-seen ones (`active_rescan_days`), so comment/vote evolution keeps being
+captured — including vote-distribution changes after commenting is disabled —
+until an article disappears.
+
+## GUI
+
+`webapp/` (React + Vite) → top-level tabs; **Data Sources** tab has a vertical
+rail of journals, each with a schedule editor, a manual **Scan now** button with
+a live progress bar, and a recent-scans table. Article browser comes next.
 
 ## Status
 
-Foundation complete and tested (ids, image store, config, JSONL store, daemon
-skeleton). The `lematin` and `24heures` adapters are **stubs** pending live site
-inspection (article markup + comment platform). Stylometry / nickname-linkage is
-a later phase.
+Le Matin adapter complete (articles + images + threaded comments + vote
+distributions + agency/source classification). 24 heures shares the adapter;
+its comment `tenantId` is still pending. Scan engine + Data Sources GUI working.
+Next: 24 heures comments, the article browser, and the profiling/stylometry phase
+(per-nickname leaning, region, language mastery, probable gender).
 
 ## Tests
 

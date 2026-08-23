@@ -9,10 +9,13 @@ export default [
       parserOptions: { ecmaFeatures: { jsx: true } },
       globals: { window: 'readonly', document: 'readonly', setInterval: 'readonly',
                  clearInterval: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly',
-                 WebSocket: 'readonly', console: 'readonly' },
+                 WebSocket: 'readonly', console: 'readonly', localStorage: 'readonly',
+                 navigator: 'readonly' },
     },
     rules: {
-      'no-unused-vars': 'warn',
+      // Without the React plugin, core no-unused-vars can't see that a
+      // capitalized import is used in JSX; ignore those to avoid false positives.
+      'no-unused-vars': ['warn', { varsIgnorePattern: '^[A-Z]' }],
       'no-undef': 'error',
     },
   },
