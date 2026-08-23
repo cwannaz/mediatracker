@@ -16,3 +16,4 @@ class LeMatin(TamediaSource):
     slug = "lematin"
     name = "Le Matin"
     base_url = "https://www.lematin.ch"
+    comment_tenant_id = 4  # api.lematin.ch/comment/v1/comments tenantId

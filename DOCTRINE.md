@@ -26,6 +26,15 @@ two feel like siblings, adapted for a crawler/archiver.
 7. **Be a polite crawler.** Per-host minimum delay, descriptive User-Agent,
    robots.txt respected by default. This is private research, not a scraper farm.
 
+## Comment collection & robots.txt
+
+Articles (`/story/…`) are robots-allowed and fetched normally. The comment API
+(`api.<domain>/comment/v1/comments`) is on a host whose robots.txt is
+`Disallow: /`. The user explicitly opted to collect comments (2026-08-23), so
+comment fetches — and only those — pass `force_allow=True` to bypass the robots
+check; the per-host politeness delay still applies. Everything else stays fully
+robots-compliant. If this posture changes, unset it in `tamedia.fetch_comments`.
+
 ## Layout
 
 - One lowercase package (`mediatracker/`) inside the repo root, with

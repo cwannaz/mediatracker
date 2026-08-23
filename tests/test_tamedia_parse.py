@@ -96,6 +96,47 @@ def test_parse_article_body_and_images():
     assert "<figure>" in art.body_html
 
 
+_COMMENTS = {
+    "commentingEnabled": True,
+    "totalCount": 3,
+    "nextLink": None,
+    "comments": [
+        {
+            "id": "aaa", "authorNickname": "Fumas", "body": "Top article.",
+            "createdAt": "2026-08-23T20:29:44.734Z", "parentCommentId": None,
+            "status": "ACCEPTED",
+            "reactions": {"awesome": 1, "bad": 2, "smart": 6, "exact": 3},
+            "replies": [
+                {"id": "bbb", "authorNickname": "tsr", "body": "Pas d'accord.",
+                 "createdAt": "2026-08-23T21:00:00.000Z", "parentCommentId": "aaa",
+                 "status": "ACCEPTED", "reactions": {"smart": 1}, "replies": []},
+            ],
+        },
+        {
+            "id": "ccc", "authorNickname": "tororosso", "body": "Deuxième.",
+            "createdAt": "2026-08-23T20:20:00.000Z", "parentCommentId": None,
+            "status": "ACCEPTED", "reactions": {}, "replies": [],
+        },
+    ],
+}
+
+
+def test_parse_comments_flattens_threads_and_reactions():
+    comments, total = tamedia.parse_comments(_COMMENTS)
+    assert total == 3
+    assert [c.source_key for c in comments] == ["aaa", "bbb", "ccc"]
+    top = comments[0]
+    assert top.author_nick == "Fumas"
+    assert top.parent_source_key is None
+    assert top.like_count == 12  # sum of reaction counts
+    assert top.reply_count == 1
+    assert top.raw_meta["reactions"]["smart"] == 6
+    reply = comments[1]
+    assert reply.author_nick == "tsr"
+    assert reply.parent_source_key == "aaa"  # linked to its parent
+    assert comments[2].like_count is None  # no reactions -> None
+
+
 def test_story_href_regex_finds_paths():
     html = 'x <a href="/story/foo-123">a</a> <a href="/story/bar-456?utm=1">b</a> <a href="/live/x">c</a>'
     paths = sorted(set(tamedia._STORY_HREF_RE.findall(html)))

@@ -70,9 +70,14 @@ class Fetcher:
             self._host_locks[host] = lock
         return lock
 
-    async def get(self, url: str, *, headers: dict[str, str] | None = None) -> Response:
+    async def get(self, url: str, *, headers: dict[str, str] | None = None,
+                  force_allow: bool = False) -> Response:
+        """Fetch `url`. Per-host politeness delay always applies. robots.txt is
+        honored unless `force_allow` is set — used only for the comment endpoints,
+        which the site disallows for generic agents but which the user has
+        explicitly opted to collect (see DOCTRINE.md / tamedia.fetch_comments)."""
         host = self._host(url)
-        if self._respect_robots and not await self._allowed(url):
+        if self._respect_robots and not force_allow and not await self._allowed(url):
             raise FetchError(f"robots.txt disallows {url}")
         # Serialize per host and honor the min-delay so we never hammer a site.
         async with self._lock(host):

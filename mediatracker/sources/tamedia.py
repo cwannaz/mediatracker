@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from urllib.parse import urlencode, urlsplit
 
 from . import register  # noqa: F401  (re-exported for subclass modules)
 from .base import ParsedArticle, ParsedComment, ParsedImage, Source
@@ -179,8 +180,52 @@ def _build_body(elements: list) -> tuple[str, list[ParsedImage]]:
     return "\n".join(parts), images
 
 
+def parse_comments(payload: dict) -> tuple[list[ParsedComment], int | None]:
+    """Flatten one comment-API page into ParsedComments (replies recursed, with
+    parent linkage). Returns (comments, total_count)."""
+    out: list[ParsedComment] = []
+
+    def add(node: dict, parent_key: str | None) -> None:
+        if not isinstance(node, dict):
+            return
+        reactions = node.get("reactions") or {}
+        like_count = sum(v for v in reactions.values() if isinstance(v, int)) or None
+        replies = node.get("replies") or []
+        out.append(ParsedComment(
+            source_key=str(node.get("id")) if node.get("id") is not None else None,
+            author_nick=node.get("authorNickname"),
+            author_key=None,  # only a nickname/avatar are exposed, no stable user id
+            body_text=node.get("body"),
+            parent_source_key=node.get("parentCommentId") or parent_key,
+            posted_at=_parse_dt(node.get("createdAt")),
+            like_count=like_count,
+            reply_count=len(replies) if isinstance(replies, list) else None,
+            raw_meta={
+                "reactions": reactions,
+                "status": node.get("status"),
+                "counterSpeech": node.get("counterSpeech"),
+            },
+        ))
+        for child in replies if isinstance(replies, list) else []:
+            add(child, str(node.get("id")))
+
+    for c in payload.get("comments") or []:
+        add(c, None)
+    return out, payload.get("totalCount")
+
+
 class TamediaSource(Source):
     comment_system = "native"  # TX Group native community platform
+
+    # tenantId for the comment API (api.<domain>/comment/v1/comments). Differs
+    # per journal; None disables comment collection until confirmed.
+    comment_tenant_id: int | None = None
+    comment_page_limit = 100
+    _comment_max = 5000  # safety cap on comments fetched per article
+
+    def _comment_api(self) -> str:
+        host = urlsplit(self.base_url).netloc.replace("www.", "", 1)
+        return f"https://api.{host}/comment/v1/comments"
 
     async def discover(self, fetcher) -> list[str]:
         resp = await fetcher.get(self.base_url + "/")
@@ -201,8 +246,49 @@ class TamediaSource(Source):
         return parse_article(data, url)
 
     async def fetch_comments(self, fetcher, article: ParsedArticle) -> list[ParsedComment]:
-        # Comments load client-side from a `/comment/` (or *.json) endpoint that
-        # robots.txt disallows for a generic user-agent. Left disabled pending an
-        # explicit crawl-posture decision (see DOCTRINE.md). Once decided, this
-        # is where the comment API is fetched and mapped to ParsedComment.
-        return []
+        """Fetch the full comment thread from api.<domain>/comment/v1/comments.
+
+        That host disallows everything in robots.txt; the user has explicitly
+        opted to collect comments, so these requests pass force_allow=True. The
+        per-host politeness delay still applies. Paginated via offset until all
+        `totalCount` comments (replies included) are retrieved.
+        """
+        if self.comment_tenant_id is None or not article.source_key:
+            if self.comment_tenant_id is None:
+                log.warning("[%s] comment_tenant_id unset; skipping comments", self.slug)
+            return []
+
+        api = self._comment_api()
+        limit = self.comment_page_limit
+        offset = 0
+        collected: list[ParsedComment] = []
+        while True:
+            params = {
+                "tenantId": self.comment_tenant_id,
+                "contentId": article.source_key,
+                "limit": limit,
+                "sortBy": "highlighted",
+                "sortOrder": "desc",
+                "offset": offset,
+            }
+            url = f"{api}?{urlencode(params)}"
+            resp = await fetcher.get(url, force_allow=True)
+            if resp.status != 200:
+                log.warning("[%s] comment API %s for content %s",
+                            self.slug, resp.status, article.source_key)
+                break
+            try:
+                payload = json.loads(resp.body)
+            except ValueError:
+                log.warning("[%s] bad comment JSON for content %s", self.slug, article.source_key)
+                break
+            page, total = parse_comments(payload)
+            collected.extend(page)
+            # A page returns top-level comments; replies inflate len(page) past
+            # `limit`, so advance the offset by the top-level count instead.
+            top_level = len(payload.get("comments") or [])
+            offset += top_level
+            if (top_level == 0 or (total is not None and offset >= total)
+                    or len(collected) >= self._comment_max):
+                break
+        return collected

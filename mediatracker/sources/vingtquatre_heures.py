@@ -16,3 +16,4 @@ class VingtQuatreHeures(TamediaSource):
     slug = "24heures"
     name = "24 heures"
     base_url = "https://www.24heures.ch"
+    comment_tenant_id = None  # TODO: confirm tenantId for api.24heures.ch (comments skipped until set)
