@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="MediaTracker">
+  <style>
+    :root { color: #FFC000; }
+    @media (prefers-color-scheme: light) { :root { color: #d8a200; } }
+  </style>
+  <path d="M18 11 H46 Q55 11 55 20 V34 Q55 43 46 43 H28 L20 52 L22.5 43 Q9 43 9 34 V20 Q9 11 18 11 Z"
+    fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M16 28 H25 L29.5 20 L34.5 38 L39 28 H48"
+    fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

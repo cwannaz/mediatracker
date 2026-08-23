@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useDaemon } from './useDaemon.js'
 import DataSources from './DataSources.jsx'
+import DeveloperLogos from './DeveloperLogos.jsx'
+import { PulseMark } from './logos.jsx'
 
 const TABS = [
   { id: 'sources', label: 'Data Sources' },
   { id: 'browser', label: 'Article Browser' },  // built later
+  { id: 'dev', label: 'Developer' },
 ]
 
 export default function App() {
@@ -22,7 +25,10 @@ export default function App() {
   return (
     <>
       <header className="topbar">
-        <span className="brand">MediaTracker</span>
+        <span className="brand">
+          <span className="brand-mark"><PulseMark width={22} height={22} /></span>
+          MediaTracker
+        </span>
         <nav className="tabs" aria-label="Sections">
           {TABS.map((t) => (
             <button
@@ -51,6 +57,7 @@ export default function App() {
           The article &amp; comment browser will live here — coming next.
         </div>
       )}
+      {tab === 'dev' && <DeveloperLogos />}
     </>
   )
 }
