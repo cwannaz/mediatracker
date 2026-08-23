@@ -34,7 +34,7 @@ mediatracker/            Python package (the daemon)
   render.py    last-resort Playwright renderer for JS-only pages
 webapp/        React 18 + Vite local GUI
 config.toml    non-secret config; secrets via secret_postgre.env (outside repo)
-mediatracker.service   systemd --user unit
+mediatracker-journals.service  systemd --user unit (named to avoid AlgoTrade's own mediatracker daemon)
 ```
 
 See `DOCTRINE.md` for conventions and `SCHEMA_SPEC.md` for the data model.

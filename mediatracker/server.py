@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 class Server:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.health = Health("mediatracker")
+        # "-journals" distinguishes this from AlgoTrade's unrelated "mediatracker"
+        # daemon in health output and logs (both run as `python3 -m mediatracker`).
+        self.health = Health("mediatracker-journals")
         self.fetcher = Fetcher(cfg)
         self.blobs = BlobStore(cfg.blob_path)
         self.store = JsonlStore(cfg.jsonl_path)
