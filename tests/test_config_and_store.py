@@ -11,7 +11,7 @@ def test_config_defaults_and_derived_paths(tmp_path, monkeypatch):
     monkeypatch.delenv("MEDIATRACKER_PORT", raising=False)
     cfg = load_config(tmp_path / "does-not-exist.toml")  # falls back to defaults
     assert cfg.host == "127.0.0.1"
-    assert cfg.port == 8830
+    assert cfg.port == 55030
     assert cfg.blob_path == cfg.data_path / "blobs"
     assert cfg.jsonl_path == cfg.data_path / "jsonl"
 

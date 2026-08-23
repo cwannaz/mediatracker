@@ -6,8 +6,10 @@
 # then by CLI flags (--host, --port, --log-level). See config.py.
 
 [daemon]
+# Ports live in the project's assigned 55000-55100 band (the 8000 region is busy
+# on this machine). Daemon: 55030; Vite dev server: 55080 (webapp/vite.config.js).
 host = "127.0.0.1"
-port = 8830
+port = 55030
 
 [polling]
 # How often each journal is re-checked. The user asked for "once or twice a

@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 class Config:
     # daemon
     host: str = "127.0.0.1"
-    port: int = 8830
+    port: int = 55030
     # polling
     poll_interval_hours: float = 12.0
     startup_stagger_seconds: float = 5.0

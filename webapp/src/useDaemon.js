@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // Each request sends {cmd, ...} and resolves with the matching {ok, cmd, ...}
 // reply. The daemon answers requests in order, so a FIFO of pending resolvers is
 // enough for this local single-client GUI.
-const DEFAULT_URL = 'ws://127.0.0.1:8830'
+const DEFAULT_URL = 'ws://127.0.0.1:55030'
 
 export function useDaemon(url = DEFAULT_URL) {
   const [connected, setConnected] = useState(false)

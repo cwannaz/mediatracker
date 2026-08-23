@@ -17,7 +17,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/mediatracker/mediatracker
-ExecStart=/usr/bin/python3 -m mediatracker --host 127.0.0.1 --port 8830 --log-level INFO
+ExecStart=/usr/bin/python3 -m mediatracker --host 127.0.0.1 --port 55030 --log-level INFO
 Restart=on-failure
 RestartSec=10
 # Postgres credentials live outside the repo; point at the secret file if not

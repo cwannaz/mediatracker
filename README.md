@@ -62,7 +62,7 @@ cd webapp && npm install && npm run dev
 
 ## Control surface
 
-The daemon speaks JSON over `ws://127.0.0.1:8830`:
+The daemon speaks JSON over `ws://127.0.0.1:55030` (project port band 55000–55100):
 
 | cmd          | effect                                          |
 |--------------|-------------------------------------------------|
