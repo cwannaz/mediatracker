@@ -46,11 +46,14 @@ See `DOCTRINE.md` for conventions and `SCHEMA_SPEC.md` for the data model.
 python3 -m pip install -r requirements-dev.txt
 playwright install chromium          # only if a journal needs JS rendering
 
-# 2. PostgreSQL (already installed locally)
-createdb MediaTracker
+# 2. PostgreSQL (already installed locally). DB name is "MediaTracker-Journals"
+#    (matches config.toml; quoted because of the hyphen/case).
+sudo -u postgres psql -c 'CREATE ROLE mediatracker LOGIN PASSWORD :pw' \
+  -v pw="'pick-a-strong-password'"
+sudo -u postgres psql -c 'CREATE DATABASE "MediaTracker-Journals" OWNER mediatracker'
 # put credentials in a secret_postgre.env kept OUTSIDE the repo:
-#   POSTGRE_USER=...
-#   POSTGRE_PASSWORD=...
+#   POSTGRE_USER=mediatracker
+#   POSTGRE_PASSWORD=pick-a-strong-password
 # (searched in repo root, ~/.config/mediatracker, ~/Documents/MATLAB)
 
 # 3. Run the daemon (schema is created automatically on first boot)

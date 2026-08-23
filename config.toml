@@ -35,7 +35,7 @@ blob_dir = ""
 jsonl_dir = ""
 
 [postgres]
-dbname = "MediaTracker"
+dbname = "MediaTracker-Journals"
 host = "127.0.0.1"
 port = 5432
 # user/password come from secret_postgre.env, never from this file.
