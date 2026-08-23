@@ -1,10 +1,12 @@
 """The MediaTracker daemon.
 
-An asyncio websocket service on 127.0.0.1 (algotrade-style): a JSON control
-surface plus one long-lived poll loop per configured journal that re-checks the
-journal every `poll_interval_hours`, staggered at startup. Postgres schema is
-ensured on boot; if Postgres is down the daemon still runs and mirrors writes to
-the JSONL store.
+An asyncio websocket service on 127.0.0.1 (algotrade-style). It seeds a journal
+row per registered source, runs the scan engine (a single-worker queue fed by
+per-journal schedulers, see scanner.py), and exposes a JSON control surface the
+local web app uses to configure sources, trigger manual scans, watch progress and
+read scan history. Postgres schema is ensured on boot; if Postgres is down the
+daemon still runs and mirrors writes to the JSONL store (scheduling/history that
+need the DB are limited in that mode).
 """
 from __future__ import annotations
 
@@ -14,13 +16,13 @@ import logging
 
 import websockets
 
-from . import db, sources
+from . import db, ids, sources
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
 from .images import BlobStore
-from .pipeline import Pipeline
 from .protocol import ProtocolError, error, ok, parse_request
+from .scanner import ScanEngine
 from .store import JsonlStore
 
 log = logging.getLogger(__name__)
@@ -36,9 +38,7 @@ class Server:
         self.blobs = BlobStore(cfg.blob_path)
         self.store = JsonlStore(cfg.jsonl_path)
         self.conn = None
-        self._tasks: list[asyncio.Task] = []
-        self._ingest_lock = asyncio.Lock()  # never two ingests at once
-        self._last_stats: dict[str, dict] = {}
+        self.engine: ScanEngine | None = None
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -52,54 +52,31 @@ class Server:
         db.ensure_schema(self.conn)
         if self.conn is None:
             log.warning("running DEGRADED: Postgres unavailable, using JSONL store only")
+        else:
+            self._seed_journals()
 
-        for slug in sources.all_slugs():
-            self.health.attach_loop(f"poll:{slug}")
-            self._tasks.append(asyncio.create_task(self._poll_loop(slug)))
+        self.engine = ScanEngine(cfg=self.cfg, conn=self.conn, blobs=self.blobs,
+                                 store=self.store, fetcher=self.fetcher, health=self.health)
+        await self.engine.start()
 
         async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
                      self.cfg.host, self.cfg.port, ", ".join(sources.all_slugs()) or "none")
             await asyncio.Future()  # run forever
 
-    # ------------------------------------------------------------------ #
-    # poll loop
-    # ------------------------------------------------------------------ #
-
-    async def _poll_loop(self, slug: str) -> None:
-        name = f"poll:{slug}"
-        # Stagger initial runs so all journals don't fire simultaneously.
-        idx = sources.all_slugs().index(slug)
-        await asyncio.sleep(self.cfg.startup_stagger_seconds * (idx + 1))
-        interval = self.cfg.poll_interval_hours * 3600.0
-        while True:
-            try:
-                await self._ingest_one(slug)
-            except Exception as exc:  # a loop must never die
-                self.health.loop_error(name)
-                log.exception("[%s] poll iteration failed: %s", slug, exc)
-            self.health.beat(name)
-            await asyncio.sleep(interval)
-
-    async def _ingest_one(self, slug: str) -> dict:
-        cls = sources.get(slug)
-        if cls is None:
-            raise ValueError(f"unknown journal {slug!r}")
-        async with self._ingest_lock:
-            pipeline = Pipeline(conn=self.conn, blobs=self.blobs,
-                                store=self.store, fetcher=self.fetcher)
-            stats = await pipeline.ingest_journal(cls())
-        result = {
-            "articles_seen": stats.articles_seen,
-            "article_snapshots": stats.article_snapshots,
-            "comments_seen": stats.comments_seen,
-            "comment_snapshots": stats.comment_snapshots,
-            "images_new": stats.images_new,
-            "errors": stats.errors,
-        }
-        self._last_stats[slug] = result
-        log.info("[%s] ingest done: %s", slug, result)
-        return result
+    def _seed_journals(self) -> None:
+        """Ensure a journal row (with a default schedule) exists for each source.
+        Existing rows keep their saved config — only a first-time or empty config
+        is initialized to defaults."""
+        for slug in sources.all_slugs():
+            cls = sources.get(slug)
+            src = cls()
+            jid = ids.journal_id(slug)
+            db.upsert_journal(self.conn, jid=jid, slug=slug, name=src.name,
+                              base_url=src.base_url, comment_system=src.comment_system,
+                              config=self.cfg.default_schedule())
+            if not (db.get_journal_config(self.conn, jid) or {}):
+                db.update_journal_config(self.conn, jid, self.cfg.default_schedule())
 
     # ------------------------------------------------------------------ #
     # websocket control surface
@@ -122,23 +99,89 @@ class Server:
     async def _dispatch(self, ws, cmd: str, msg: dict) -> None:
         if cmd == "ping":
             await ws.send(ok("ping", pong=True))
+
         elif cmd == "health":
             await ws.send(ok("health", **self.health.verdict(
                 stale_after_s=self.cfg.poll_interval_hours * 3600.0 * 2)))
+
         elif cmd == "status":
             await ws.send(ok("status",
                              degraded=self.conn is None,
                              journals=sources.all_slugs(),
-                             last_stats=self._last_stats))
-        elif cmd == "ingest_now":
+                             last_stats=self.engine.last_stats if self.engine else {}))
+
+        elif cmd == "list_sources":
+            await ws.send(ok("list_sources", sources=self._list_sources()))
+
+        elif cmd == "update_source":
+            await ws.send(self._update_source(msg))
+
+        elif cmd == "trigger_scan":
             slug = msg.get("journal")
-            slugs = [slug] if slug else sources.all_slugs()
-            results = {}
-            for s in slugs:
-                results[s] = await self._ingest_one(s)
-            await ws.send(ok("ingest_now", results=results))
+            if not slug or sources.get(slug) is None:
+                await ws.send(error(cmd, f"unknown or missing journal {slug!r}"))
+                return
+            run_id = self.engine.enqueue(slug, "manual")
+            await ws.send(ok(cmd, journal=slug, run_id=run_id, queued=self.engine.queue.qsize()))
+
+        elif cmd == "scan_status":
+            await ws.send(ok("scan_status",
+                             current=self.engine.current if self.engine else None,
+                             queued=self.engine.queue.qsize() if self.engine else 0,
+                             last_stats=self.engine.last_stats if self.engine else {}))
+
+        elif cmd == "scan_history":
+            if self.conn is None:
+                await ws.send(ok("scan_history", runs=[], degraded=True))
+                return
+            runs = db.list_scan_runs(self.conn, slug=msg.get("journal"),
+                                     limit=int(msg.get("limit", 50)))
+            await ws.send(ok("scan_history", runs=runs))
+
         else:
             await ws.send(error(cmd, f"unknown command {cmd!r}"))
+
+    # ------------------------------------------------------------------ #
+    # helpers
+    # ------------------------------------------------------------------ #
+
+    def _list_sources(self) -> list[dict]:
+        out = []
+        for slug in sources.all_slugs():
+            cls = sources.get(slug)
+            sched = self.engine.schedule_of(slug) if self.engine else {}
+            inst = self.engine.source_instance(slug) if self.engine else cls()
+            out.append({
+                "slug": slug,
+                "name": cls.name,
+                "base_url": inst.base_url,
+                "comment_system": cls.comment_system,
+                "comments_supported": getattr(cls, "comment_tenant_id", None) is not None,
+                "schedule": sched,
+                "next_scan_at": self.engine.next_theoretical(slug) if self.engine else None,
+                "last": (self.engine.last_stats.get(slug) if self.engine else None),
+            })
+        return out
+
+    def _update_source(self, msg: dict) -> str:
+        slug = msg.get("journal")
+        if not slug or sources.get(slug) is None:
+            return error("update_source", f"unknown or missing journal {slug!r}")
+        if self.conn is None:
+            return error("update_source", "degraded: cannot persist config without Postgres")
+        patch = msg.get("schedule") or {}
+        allowed = {"enabled", "base_url", "scan_start_local", "scan_period_hours",
+                   "scan_variability_hours", "timezone"}
+        jid = ids.journal_id(slug)
+        current = db.get_journal_config(self.conn, jid) or self.cfg.default_schedule()
+        merged = dict(current)
+        for k, v in patch.items():
+            if k in allowed:
+                merged[k] = v
+        db.update_journal_config(self.conn, jid, merged)
+        log.info("[%s] schedule updated: %s", slug, merged)
+        return ok("update_source", journal=slug, schedule=merged,
+                  next_scan_at=self.engine.next_theoretical(slug) if self.engine else None)
 
 
 def main(argv: list[str] | None = None) -> int:

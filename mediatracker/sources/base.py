@@ -29,7 +29,8 @@ class ParsedArticle:
     source_key: str | None = None
     headline: str | None = None
     subhead: str | None = None
-    author: str | None = None
+    author: str | None = None       # byline (human authors and/or agency)
+    source: str | None = None       # originating news agency (Reuters/AFP/ATS…)
     section: str | None = None
     lang: str | None = None
     published_at: datetime | None = None
@@ -63,6 +64,11 @@ class Source:
     name: str = ""                 # human name, e.g. "Le Matin"
     base_url: str = ""             # e.g. "https://www.lematin.ch"
     comment_system: str | None = None  # 'native' | 'coral' | 'disqus' | ...
+
+    def __init__(self, *, base_url: str | None = None) -> None:
+        # Per-journal base_url override (edited in the GUI) shadows the class default.
+        if base_url:
+            self.base_url = base_url.rstrip("/")
 
     async def discover(self, fetcher) -> list[str]:
         """Return candidate article URLs to (re-)check this cycle — typically

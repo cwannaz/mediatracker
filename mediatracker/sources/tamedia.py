@@ -74,6 +74,35 @@ def _best_variant_src(image: dict) -> str | None:
     return best
 
 
+# News agencies whose byline/credit we want to classify separately from human
+# authors. Matched as a whole author name or as a trailing "(AGENCY)" in text.
+_AGENCIES = ["Agence France-Presse", "AFP", "Reuters", "Keystone-ATS", "ATS",
+             "Associated Press", "AP", "Bloomberg", "dpa", "EFE", "ANSA", "APA",
+             "Keystone"]
+_AGENCY_NAMES = {a.lower() for a in _AGENCIES}
+_TRAILING_AGENCY_RE = re.compile(
+    r"\((" + "|".join(re.escape(a) for a in _AGENCIES) + r")\)\s*$"
+)
+
+
+def _detect_source(meta: dict, authors: list, text: str | None) -> str | None:
+    """Best-effort news-agency detection so sources can be classified apart from
+    human authors (the article's byline sometimes IS an agency, sometimes a human
+    with a trailing "(Reuters)")."""
+    for a in authors:
+        if a.get("authorType") in ("agency", "newsagency"):
+            return a.get("name")
+    for a in authors:
+        if (a.get("name") or "").strip().lower() in _AGENCY_NAMES:
+            return a.get("name")
+    if text:
+        m = _TRAILING_AGENCY_RE.search(text.strip())
+        if m:
+            return m.group(1)
+    cp = meta.get("copyright")
+    return cp or None
+
+
 def _image_caption(image: dict) -> str | None:
     cap = image.get("caption")
     if isinstance(cap, dict):
@@ -115,23 +144,34 @@ def parse_article(data: dict, url: str, *, lang: str = "fr") -> ParsedArticle | 
             images.append(ParsedImage(orig_url=src, role="hero", position=0,
                                       alt_text=desc, caption=desc or None))
 
+    body_text = _strip_html(body_html) or None
+    source = _detect_source(meta, authors, body_text)
+    authors_struct = [
+        {"name": a.get("name"), "authorType": a.get("authorType"),
+         "publicUserId": a.get("publicUserId")}
+        for a in authors
+    ]
+
     return ParsedArticle(
         url=url,
         source_key=str(content.get("id") or wrapper.get("id") or "") or None,
         headline=_strip_html(headline) if headline else None,
         subhead=subhead,
         author=author,
+        source=source,
         section=meta.get("mainCategoryName") or article.get("titleHeader"),
         lang=lang,
         published_at=_parse_dt(meta.get("published")),
         updated_at=_parse_dt(meta.get("updated")),
-        body_text=_strip_html(body_html) or None,
+        body_text=body_text,
         body_html=body_html or None,
         comment_count=None,  # not exposed in the page; count comes from comments
         images=images,
         raw_meta={
             "kickword": meta.get("kickword"),
             "tags": meta.get("tags"),
+            "authors": authors_struct,
+            "copyright": meta.get("copyright"),
             "mainCategoryFullUrlPath": meta.get("mainCategoryFullUrlPath"),
             "urlSlug": meta.get("urlSlug"),
             "wordCount": meta.get("wordCount"),

@@ -25,9 +25,16 @@ class Config:
     # daemon
     host: str = "127.0.0.1"
     port: int = 55030
-    # polling
+    # polling / scheduling (defaults for a journal that has no saved schedule;
+    # per-journal overrides live in journal.config and are edited from the GUI)
     poll_interval_hours: float = 12.0
     startup_stagger_seconds: float = 5.0
+    scan_start_local: str = "06:00"      # HH:MM in `timezone`
+    scan_period_hours: float = 4.0       # re-scan cadence through the day
+    scan_variability_hours: float = 0.5  # ± random jitter so access looks human
+    timezone: str = "Europe/Zurich"
+    active_rescan_days: int = 10         # keep re-scanning an article this long
+    scan_enabled_default: bool = True
     # fetch
     request_delay_seconds: float = 2.0
     request_timeout_seconds: float = 30.0
@@ -54,6 +61,17 @@ class Config:
     @property
     def jsonl_path(self) -> Path:
         return Path(self.jsonl_dir).expanduser() if self.jsonl_dir else self.data_path / "jsonl"
+
+    def default_schedule(self) -> dict:
+        """The schedule stored in a journal's config when it has none yet."""
+        return {
+            "enabled": self.scan_enabled_default,
+            "base_url": None,  # None -> use the adapter's built-in base_url
+            "scan_start_local": self.scan_start_local,
+            "scan_period_hours": self.scan_period_hours,
+            "scan_variability_hours": self.scan_variability_hours,
+            "timezone": self.timezone,
+        }
 
 
 def _default_config_toml() -> Path:

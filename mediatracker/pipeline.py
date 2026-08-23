@@ -35,11 +35,18 @@ class Pipeline:
         self.store = store          # JsonlStore
         self.fetcher = fetcher
 
-    async def ingest_journal(self, source: Source) -> IngestStats:
+    async def ingest_journal(self, source: Source, *, since_days: int = 10,
+                             on_progress=None) -> IngestStats:
+        """Scan a journal: discover new articles from the homepage AND re-scan
+        recently-seen articles (so comment/vote evolution keeps being captured
+        until an article disappears). `on_progress(done, total)` is called after
+        each article so the GUI can show a progress bar."""
         stats = IngestStats()
         self._register_journal(source)
+        jid = ids.journal_id(source.slug)
+
         try:
-            urls = await source.discover(self.fetcher)
+            discovered = await source.discover(self.fetcher)
         except NotImplementedError:
             log.warning("[%s] adapter not implemented yet; skipping", source.slug)
             return stats
@@ -48,16 +55,43 @@ class Pipeline:
             stats.errors += 1
             return stats
 
-        log.info("[%s] discovered %d article urls", source.slug, len(urls))
-        for url in urls:
+        active: list[str] = []
+        if self.conn is not None:
             try:
-                await self._ingest_article(source, url, stats)
+                active = db.active_article_urls(self.conn, jid, since_days=since_days)
+            except Exception as exc:
+                log.warning("[%s] active-article lookup failed: %s", source.slug, exc)
+
+        # Merge, canonical-deduped: freshly discovered first, then rescans.
+        seen: set[str] = set()
+        worklist: list[tuple[str, bool]] = []
+        for url in discovered:
+            c = ids.canonical_url(url)
+            if c not in seen:
+                seen.add(c)
+                worklist.append((url, False))  # discovery
+        for url in active:
+            c = ids.canonical_url(url)
+            if c not in seen:
+                seen.add(c)
+                worklist.append((url, True))   # rescan
+
+        total = len(worklist)
+        log.info("[%s] scan work-list: %d (%d new-discovery, %d rescan)",
+                 source.slug, total, len(discovered), total - len(discovered))
+        if on_progress:
+            on_progress(0, total)
+        for i, (url, is_rescan) in enumerate(worklist):
+            try:
+                await self._ingest_article(source, url, stats, is_rescan=is_rescan)
             except FetchError as exc:
                 log.warning("[%s] fetch error for %s: %s", source.slug, url, exc)
                 stats.errors += 1
             except Exception as exc:
                 log.exception("[%s] unexpected error for %s: %s", source.slug, url, exc)
                 stats.errors += 1
+            if on_progress:
+                on_progress(i + 1, total)
         return stats
 
     # ------------------------------------------------------------------ #
@@ -75,9 +109,13 @@ class Pipeline:
                 "base_url": source.base_url, "comment_system": source.comment_system,
             })
 
-    async def _ingest_article(self, source: Source, url: str, stats: IngestStats) -> None:
+    async def _ingest_article(self, source: Source, url: str, stats: IngestStats,
+                              *, is_rescan: bool = False) -> None:
         article = await source.fetch_article(self.fetcher, url)
         if article is None:
+            # A rescanned article that no longer parses is treated as gone.
+            if is_rescan and self.conn is not None:
+                db.mark_article_gone(self.conn, ids.article_id(source.slug, url))
             return
         stats.articles_seen += 1
 
@@ -102,7 +140,8 @@ class Pipeline:
         fields = {
             "published_at": article.published_at, "updated_at": article.updated_at,
             "headline": article.headline, "subhead": article.subhead,
-            "author": article.author, "section": article.section, "lang": article.lang,
+            "author": article.author, "source": article.source,
+            "section": article.section, "lang": article.lang,
             "body_text": article.body_text, "body_html": article.body_html,
             "comment_count": article.comment_count, "raw_meta": article.raw_meta,
         }
@@ -158,8 +197,14 @@ class Pipeline:
             cid = ids.synthetic_comment_id(
                 aid, c.author_nick or "", str(c.posted_at or ""), c.body_text or "")
         parent = ids.comment_id(slug, aid, c.parent_source_key) if c.parent_source_key else None
+        # Include the reaction distribution so evolving votes (which keep changing
+        # even after commenting is disabled) always produce a fresh snapshot — the
+        # latest snapshot is then the final vote distribution.
+        reactions = (c.raw_meta or {}).get("reactions") or {}
+        reactions_sig = ";".join(f"{k}={reactions[k]}" for k in sorted(reactions))
         chash = ids.content_hash(c.body_text or c.body_html or "",
-                                 str(c.like_count or ""), str(c.reply_count or ""))
+                                 str(c.like_count or ""), str(c.reply_count or ""),
+                                 reactions_sig)
         fields = {
             "posted_at": c.posted_at, "body_text": c.body_text, "body_html": c.body_html,
             "like_count": c.like_count, "reply_count": c.reply_count, "raw_meta": c.raw_meta,

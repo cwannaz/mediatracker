@@ -199,6 +199,31 @@ CREATE TABLE IF NOT EXISTS article_image (
     caption     TEXT,
     PRIMARY KEY (snapshot_id, sha256, position)
 );
+
+-- One row per scan attempt (scheduled or manual), for the GUI history table and
+-- progress reporting.
+CREATE TABLE IF NOT EXISTS scan_run (
+    id                BIGSERIAL PRIMARY KEY,
+    journal_id        TEXT NOT NULL REFERENCES journal(id),
+    slug              TEXT NOT NULL,
+    trigger           TEXT NOT NULL,          -- 'manual' | 'scheduled'
+    status            TEXT NOT NULL,          -- 'queued'|'running'|'done'|'error'
+    requested_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at        TIMESTAMPTZ,
+    finished_at       TIMESTAMPTZ,
+    articles_seen     INTEGER NOT NULL DEFAULT 0,
+    article_snapshots INTEGER NOT NULL DEFAULT 0,
+    comments_seen     INTEGER NOT NULL DEFAULT 0,
+    comment_snapshots INTEGER NOT NULL DEFAULT 0,
+    images_new        INTEGER NOT NULL DEFAULT 0,
+    errors            INTEGER NOT NULL DEFAULT 0,
+    note              TEXT
+);
+CREATE INDEX IF NOT EXISTS scan_run_slug_idx ON scan_run (slug, requested_at DESC);
+
+-- Additive column upgrades (safe to run every boot).
+ALTER TABLE article_snapshot ADD COLUMN IF NOT EXISTS source TEXT;   -- news agency (Reuters/AFP/ATS…)
+ALTER TABLE article ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ;    -- when the article stopped being reachable
 """
 
 
@@ -229,8 +254,9 @@ def upsert_journal(conn, *, jid: str, slug: str, name: str, base_url: str,
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 base_url = EXCLUDED.base_url,
-                comment_system = COALESCE(EXCLUDED.comment_system, journal.comment_system),
-                config = EXCLUDED.config
+                comment_system = COALESCE(EXCLUDED.comment_system, journal.comment_system)
+            -- NOTE: config is intentionally NOT overwritten here; the GUI owns it
+            -- (see update_journal_config). Only the initial INSERT sets it.
             """,
             (jid, slug, name, base_url, comment_system, _jsonb(config)),
         )
@@ -244,6 +270,7 @@ def upsert_article(conn, *, aid: str, journal_id: str, canonical_url: str,
             INSERT INTO article (id, journal_id, canonical_url, source_key)
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET last_seen = now(),
+                gone_at = NULL,  -- successfully re-seen, so no longer gone
                 source_key = COALESCE(EXCLUDED.source_key, article.source_key)
             """,
             (aid, journal_id, canonical_url, source_key),
@@ -259,10 +286,10 @@ def insert_article_snapshot(conn, *, article_id: str, content_hash: str,
             """
             INSERT INTO article_snapshot
                 (article_id, content_hash, published_at, updated_at, headline,
-                 subhead, author, section, lang, body_text, body_html,
+                 subhead, author, source, section, lang, body_text, body_html,
                  comment_count, raw_meta)
             VALUES (%(article_id)s, %(content_hash)s, %(published_at)s, %(updated_at)s,
-                    %(headline)s, %(subhead)s, %(author)s, %(section)s, %(lang)s,
+                    %(headline)s, %(subhead)s, %(author)s, %(source)s, %(section)s, %(lang)s,
                     %(body_text)s, %(body_html)s, %(comment_count)s, %(raw_meta)s)
             ON CONFLICT (article_id, content_hash) DO NOTHING
             RETURNING id
@@ -275,6 +302,7 @@ def insert_article_snapshot(conn, *, article_id: str, content_hash: str,
                 "headline": fields.get("headline"),
                 "subhead": fields.get("subhead"),
                 "author": fields.get("author"),
+                "source": fields.get("source"),
                 "section": fields.get("section"),
                 "lang": fields.get("lang"),
                 "body_text": fields.get("body_text"),
@@ -356,3 +384,97 @@ def link_article_image(conn, *, snapshot_id: int, sha256: str, role: str | None,
             """,
             (snapshot_id, sha256, role, position, orig_url, alt_text, caption),
         )
+
+
+# --------------------------------------------------------------------------- #
+# Journals (config / schedule) and scan bookkeeping
+# --------------------------------------------------------------------------- #
+
+def list_journals(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, slug, name, base_url, comment_system, config FROM journal ORDER BY slug")
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_journal_config(conn, jid: str) -> dict | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT config FROM journal WHERE id = %s", (jid,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def update_journal_config(conn, jid: str, config: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE journal SET config = %s WHERE id = %s", (_jsonb(config), jid))
+
+
+def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
+    """Canonical URLs of articles seen recently and not marked gone — these are
+    re-scanned each cycle so comment/vote evolution keeps being captured until
+    the article disappears."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT canonical_url FROM article
+            WHERE journal_id = %s AND gone_at IS NULL
+              AND last_seen > now() - make_interval(days => %s)
+            ORDER BY last_seen DESC
+            """,
+            (journal_id, since_days),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def mark_article_gone(conn, aid: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE article SET gone_at = now() WHERE id = %s AND gone_at IS NULL", (aid,)
+        )
+
+
+def create_scan_run(conn, *, journal_id: str, slug: str, trigger: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO scan_run (journal_id, slug, trigger, status)
+            VALUES (%s, %s, %s, 'queued') RETURNING id
+            """,
+            (journal_id, slug, trigger),
+        )
+        return cur.fetchone()[0]
+
+
+def start_scan_run(conn, run_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE scan_run SET status='running', started_at=now() WHERE id=%s", (run_id,)
+        )
+
+
+def finish_scan_run(conn, run_id: int, *, status: str, stats: dict, note: str | None = None) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE scan_run SET status=%s, finished_at=now(),
+                articles_seen=%s, article_snapshots=%s, comments_seen=%s,
+                comment_snapshots=%s, images_new=%s, errors=%s, note=%s
+            WHERE id=%s
+            """,
+            (status, stats.get("articles_seen", 0), stats.get("article_snapshots", 0),
+             stats.get("comments_seen", 0), stats.get("comment_snapshots", 0),
+             stats.get("images_new", 0), stats.get("errors", 0), note, run_id),
+        )
+
+
+def list_scan_runs(conn, *, slug: str | None = None, limit: int = 50) -> list[dict]:
+    with conn.cursor() as cur:
+        if slug:
+            cur.execute(
+                "SELECT * FROM scan_run WHERE slug=%s ORDER BY requested_at DESC LIMIT %s",
+                (slug, limit),
+            )
+        else:
+            cur.execute("SELECT * FROM scan_run ORDER BY requested_at DESC LIMIT %s", (limit,))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
