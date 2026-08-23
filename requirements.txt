@@ -1,0 +1,6 @@
+# MediaTracker runtime dependencies — kept deliberately minimal.
+# House rule (see DOCTRINE.md): stdlib first. Fetching/parsing uses urllib +
+# xml.etree + re. Third-party deps must earn their place.
+psycopg[binary]>=3.1        # PostgreSQL driver (raw SQL, no ORM)
+websockets>=14              # daemon control/query surface on 127.0.0.1
+playwright>=1.40            # LAST-RESORT renderer for JS-only journals/comments

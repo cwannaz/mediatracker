@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets — never commit (see DOCTRINE.md)
+secret_*.env
+
+# Local data lake (blobs + jsonl fallback store)
+/data/
+*.jsonl
+
+# Node / Vite frontend
+node_modules/
+webapp/dist/
+webapp/.vite/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

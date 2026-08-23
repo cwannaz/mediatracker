@@ -1,0 +1,39 @@
+# MediaTracker — machine-local, non-secret configuration.
+#
+# Secrets (Postgres user/password) do NOT belong here. They are read from a
+# secret_postgre.env file kept outside the repo — see DOCTRINE.md and db.py.
+# Values here can be overridden by MEDIATRACKER_* environment variables and
+# then by CLI flags (--host, --port, --log-level). See config.py.
+
+[daemon]
+host = "127.0.0.1"
+port = 8830
+
+[polling]
+# How often each journal is re-checked. The user asked for "once or twice a
+# day"; default is twice daily. Loops stagger their first run so startup does
+# not stampede every source at once.
+poll_interval_hours = 12.0
+startup_stagger_seconds = 5.0
+
+[fetch]
+# Politeness: minimum delay between successive requests to the SAME host, and a
+# descriptive User-Agent. respect_robots gates crawling against robots.txt.
+request_delay_seconds = 2.0
+request_timeout_seconds = 30.0
+user_agent = "MediaTracker/0.1 (local media-research crawler)"
+respect_robots = true
+
+[storage]
+# Root of the local data lake. blob_dir / jsonl_dir default to sub-dirs of this
+# when left empty. "~" is expanded. Content-addressed images live under blob_dir
+# (blobs/ab/cd/<sha256>.<ext>); the JSONL store is the Postgres-down fallback.
+data_dir = "~/.local/share/mediatracker"
+blob_dir = ""
+jsonl_dir = ""
+
+[postgres]
+dbname = "MediaTracker"
+host = "127.0.0.1"
+port = 5432
+# user/password come from secret_postgre.env, never from this file.
