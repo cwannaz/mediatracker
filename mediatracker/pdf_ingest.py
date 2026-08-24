@@ -136,8 +136,11 @@ def ingest_record(conn, record: dict, stats: dict) -> None:
     raw_meta = {"ingested_by": "pdf-llm", "source_file": base,
                 "archive_url": parsed.get("url"), "note": parsed.get("note")}
 
-    # An archived capture must never downgrade a live article's origin.
-    origin = "live" if merged else "pdf"
+    # An archived capture must never downgrade a live article's origin — but
+    # "merged" only means we found an article with the same native id, and that
+    # article may itself be an earlier PDF capture. Only a real crawled URL
+    # makes this live; two archives of the same page stay an archive.
+    origin = "live" if merged and not canon.startswith("pdf://") else "pdf"
     db.upsert_article(conn, aid=aid, journal_id=jid, canonical_url=canon,
                       source_key=native, origin=origin, source_file=base)
     snap_id = db.insert_article_snapshot(conn, article_id=aid, content_hash=chash, fields={

@@ -469,12 +469,18 @@ def update_journal_config(conn, jid: str, config: dict) -> None:
 def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
     """Canonical URLs of articles seen recently and not marked gone — these are
     re-scanned each cycle so comment/vote evolution keeps being captured until
-    the article disappears."""
+    the article disappears.
+
+    Archived captures are excluded: their canonical_url is a pdf:// pseudo-URL
+    no fetcher can retrieve, and a printed page is finished — there is no later
+    state to catch. An archive that merged into a crawled article keeps
+    origin='live' and so keeps being re-scanned, which is the intent."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT canonical_url FROM article
             WHERE journal_id = %s AND gone_at IS NULL
+              AND origin <> 'pdf' AND canonical_url NOT LIKE 'pdf://%%'
               AND last_seen > now() - make_interval(days => %s)
             ORDER BY last_seen DESC
             """,
