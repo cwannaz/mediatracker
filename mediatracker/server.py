@@ -16,7 +16,7 @@ import logging
 
 import websockets
 
-from . import blobserver, db, ids, sources
+from . import alias_candidates, blobserver, db, ids, sources
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -137,7 +137,7 @@ class Server:
                      "browse_commenters", "get_commenter", "browse_authors",
                      "browse_sources", "list_personas", "get_persona",
                      "create_persona", "add_alias", "remove_alias",
-                     "delete_persona", "link_nicks"):
+                     "delete_persona", "link_nicks", "alias_candidates"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -218,6 +218,14 @@ class Server:
     def _personas(self, cmd: str, msg: dict, limit: int) -> str:
         """Identity layer: group the nicknames of one person into a persona so
         analysis runs on the person rather than on each pseudonym."""
+        if cmd == "alias_candidates":
+            # Nicknames already claimed by a persona, so the GUI can mark them.
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT nick FROM persona_alias")
+                linked = {r[0] for r in cur.fetchall()}
+            strong, weak = alias_candidates.find_groups(
+                self.conn, int(msg.get("min_comments", 2)), linked=linked)
+            return ok(cmd, strong=strong, weak=weak, linked=sorted(linked))
         if cmd == "list_personas":
             return ok(cmd, personas=db.list_personas(self.conn))
         if cmd == "get_persona":

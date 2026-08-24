@@ -2,11 +2,13 @@ import { useEffect, useState, useCallback } from 'react'
 import ArticleView from './ArticleView.jsx'
 import CommenterView from './CommenterView.jsx'
 import PersonaView from './PersonaView.jsx'
+import Aggregation from './Aggregation.jsx'
 
 const SUBTABS = [
   { id: 'articles', label: 'Articles', statKey: 'articles' },
   { id: 'commenters', label: 'Commenters', statKey: 'commenters' },
   { id: 'people', label: 'People', statKey: 'personas' },
+  { id: 'aggregation', label: 'Aggregation' },
   { id: 'authors', label: 'Authors', statKey: 'authors' },
   { id: 'sources', label: 'Sources', statKey: 'sources' },
 ]
@@ -70,6 +72,8 @@ export default function Browser({ connected, send }) {
                 onArticle={(id) => { setTab('articles'); setOpenArticle(id) }} />
             : <PersonaList send={send} onOpen={setOpenPersona} />
         )}
+
+        {connected && tab === 'aggregation' && <Aggregation send={send} onPersona={showPersona} />}
 
         {connected && tab === 'authors' && <AuthorList send={send} />}
         {connected && tab === 'sources' && <SourceList send={send} />}
