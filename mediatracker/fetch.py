@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import http.cookiejar
+import json
 import logging
 import threading
 import time
@@ -85,6 +86,24 @@ class Fetcher:
         honored unless `force_allow` is set — used only for the comment endpoints,
         which the site disallows for generic agents but which the user has
         explicitly opted to collect (see DOCTRINE.md / tamedia.fetch_comments)."""
+        return await self._request(url, None, headers=headers, force_allow=force_allow)
+
+    async def post_json(self, url: str, payload: dict, *,
+                        headers: dict[str, str] | None = None,
+                        force_allow: bool = False) -> Response:
+        """POST a JSON body. Some sites render a fragment (comments, more-results)
+        from an internal endpoint that only answers POST; that is still one
+        request for one document, so it goes through the same politeness gate as
+        a GET. This never writes anything on the site — see the adapters."""
+        body = json.dumps(payload).encode("utf-8")
+        hdrs = {"Content-Type": "application/json", "Accept": "*/*"}
+        if headers:
+            hdrs.update(headers)
+        return await self._request(url, body, headers=hdrs, force_allow=force_allow)
+
+    async def _request(self, url: str, data: bytes | None, *,
+                       headers: dict[str, str] | None,
+                       force_allow: bool) -> Response:
         host = self._host(url)
         if self._respect_robots and not force_allow and not await self._allowed(url):
             raise FetchError(f"robots.txt disallows {url}")
@@ -93,11 +112,12 @@ class Fetcher:
             wait = self._delay - (time.monotonic() - self._last_hit.get(host, 0.0))
             if wait > 0:
                 await asyncio.sleep(wait)
-            resp = await asyncio.to_thread(self._blocking_get, url, headers)
+            resp = await asyncio.to_thread(self._blocking_get, url, headers, data)
             self._last_hit[host] = time.monotonic()
             return resp
 
-    def _blocking_get(self, url: str, headers: dict[str, str] | None) -> Response:
+    def _blocking_get(self, url: str, headers: dict[str, str] | None,
+                      data: bytes | None = None) -> Response:
         req_headers = {
             "User-Agent": self._ua,
             "Accept-Encoding": "gzip, deflate",
@@ -105,7 +125,8 @@ class Fetcher:
         }
         if headers:
             req_headers.update(headers)
-        req = urllib.request.Request(url, headers=req_headers)
+        req = urllib.request.Request(url, data=data, headers=req_headers,
+                                     method="POST" if data is not None else "GET")
         try:
             with self._opener_lock:
                 opener = self._opener

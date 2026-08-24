@@ -1,19 +1,22 @@
 """24 heures (24heures.ch) adapter.
 
-Another TX Group / Tamedia Next.js title, sharing `TamediaSource`. The module
-name avoids a leading digit; the stable slug is "24heures". The shared parser is
-assumed to apply (same platform as Le Matin) and should be confirmed against a
-live 24heures article before relying on its output.
+24 heures has left the TX Group Next.js platform that `tamedia.py` targets and
+is now an Astro site, so it shares `TxAstroSource` rather than `TamediaSource`.
+The module name avoids a leading digit; the stable slug is "24heures".
 """
 from __future__ import annotations
 
 from . import register
-from .tamedia import TamediaSource
+from .tx_astro import TxAstroSource
 
 
 @register
-class VingtQuatreHeures(TamediaSource):
+class VingtQuatreHeures(TxAstroSource):
     slug = "24heures"
     name = "24 heures"
     base_url = "https://www.24heures.ch"
-    comment_tenant_id = None  # TODO: confirm tenantId for api.24heures.ch (comments skipped until set)
+    # The homepage carries the day's selection only. These are the desk fronts
+    # the breadcrumbs use, so a story that never reaches the front page is
+    # still seen.
+    sections = ("/vaud-regions", "/suisse", "/monde", "/economie", "/sports",
+                "/culture", "/savoirs", "/vivre")
