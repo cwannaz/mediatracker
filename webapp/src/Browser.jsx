@@ -67,27 +67,32 @@ export default function Browser({ connected, send }) {
 
 function useQuery(send, cmd, key, params = {}) {
   const [rows, setRows] = useState(null)
+  const [err, setErr] = useState(null)
   const dep = JSON.stringify(params)
   useEffect(() => {
     let alive = true
-    send(cmd, params).then((r) => { if (alive && r.ok) setRows(r[key] || []) }).catch(() => {})
+    send(cmd, params).then((r) => {
+      if (!alive) return
+      if (r.ok) { setRows(r[key] || []); setErr(null) } else { setErr(r.error); setRows([]) }
+    }).catch(() => {})
     return () => { alive = false }
   }, [cmd, key, dep])  // eslint-disable-line
-  return rows
+  return [rows, err]
 }
 
 function ArticleList({ send, onOpen }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
-  const rows = useQuery(send, 'browse_articles', 'articles', { q: term || null, limit: 300 })
+  const [rows, err] = useQuery(send, 'browse_articles', 'articles', { q: term || null, limit: 300 })
   return (
     <>
       <div className="toolbar">
-        <input type="text" placeholder="Search headlines…" value={q}
+        <input type="text" placeholder="Search headlines (regex, e.g. ^Les|Syrie)" value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && setTerm(q)} />
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
       </div>
+      {err && <div className="banner warn">{err}</div>}
       {!rows ? <div className="empty">Loading…</div> : rows.length === 0 ? <div className="empty">No articles.</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
@@ -117,15 +122,16 @@ function ArticleList({ send, onOpen }) {
 function CommenterList({ send, onOpen }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
-  const rows = useQuery(send, 'browse_commenters', 'commenters', { q: term || null, limit: 500 })
+  const [rows, err] = useQuery(send, 'browse_commenters', 'commenters', { q: term || null, limit: 500 })
   return (
     <>
       <div className="toolbar">
-        <input type="text" placeholder="Search nicknames…" value={q}
+        <input type="text" placeholder="Search nicknames (regex, e.g. ^j|_64$)" value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && setTerm(q)} />
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
       </div>
+      {err && <div className="banner warn">{err}</div>}
       {!rows ? <div className="empty">Loading…</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
@@ -152,7 +158,7 @@ function CommenterList({ send, onOpen }) {
 }
 
 function AuthorList({ send }) {
-  const rows = useQuery(send, 'browse_authors', 'authors', { limit: 500 })
+  const [rows] = useQuery(send, 'browse_authors', 'authors', { limit: 500 })
   if (!rows) return <div className="empty">Loading…</div>
   if (!rows.length) return <div className="empty">No bylines recorded yet.</div>
   return (
@@ -170,7 +176,7 @@ function AuthorList({ send }) {
 }
 
 function SourceList({ send }) {
-  const rows = useQuery(send, 'browse_sources', 'sources', { limit: 500 })
+  const [rows] = useQuery(send, 'browse_sources', 'sources', { limit: 500 })
   if (!rows) return <div className="empty">Loading…</div>
   if (!rows.length) return <div className="empty">No news agencies recorded yet.</div>
   return (

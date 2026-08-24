@@ -139,7 +139,10 @@ class Server:
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
-            await ws.send(self._browse(cmd, msg))
+            try:
+                await ws.send(self._browse(cmd, msg))
+            except db.BadPattern as exc:
+                await ws.send(error(cmd, f"invalid search pattern: {exc}", bad_pattern=True))
 
         elif cmd == "scan_history":
             if self.conn is None:

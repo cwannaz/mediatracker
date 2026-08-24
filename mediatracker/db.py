@@ -487,9 +487,20 @@ def finish_scan_run(conn, run_id: int, *, status: str, stats: dict, note: str | 
 # Browsing / read queries (Article Browser: articles, commenters, authors, sources)
 # --------------------------------------------------------------------------- #
 
+class BadPattern(ValueError):
+    """The user's search regex is not valid POSIX — surfaced to the GUI as such."""
+
+
 def _rows(cur) -> list[dict]:
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _guard_regex(exc: Exception) -> None:
+    """Re-raise a Postgres regex failure as BadPattern; otherwise pass it on."""
+    if "invalid regular expression" in str(exc).lower():
+        raise BadPattern(str(exc).splitlines()[0]) from exc
+    raise exc
 
 
 def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
@@ -499,18 +510,28 @@ def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
         SELECT DISTINCT ON (a.id)
                a.id, a.canonical_url, a.origin, a.source_file, j.slug AS journal,
                s.headline, s.subhead, s.author, s.source, s.section,
-               s.published_at, s.comment_count, s.id AS snapshot_id
+               s.published_at, s.id AS snapshot_id,
+               -- Prefer the number of comments actually stored; fall back to the
+               -- count the page announced (the live site does not expose one).
+               COALESCE(cc.n, s.comment_count) AS comment_count
         FROM article a
         JOIN journal j ON j.id = a.journal_id
         LEFT JOIN article_snapshot s ON s.article_id = a.id
-        WHERE (%(q)s IS NULL OR s.headline ILIKE '%%' || %(q)s || '%%')
-          AND (%(journal)s IS NULL OR j.slug = %(journal)s)
+        LEFT JOIN (SELECT article_id, count(*) AS n FROM comment GROUP BY article_id) cc
+               ON cc.article_id = a.id
+        -- Search is a case-insensitive POSIX regex (~*). Casts are required:
+        -- without them Postgres cannot infer the type of a bare "$1 IS NULL".
+        WHERE (%(q)s::text IS NULL OR s.headline ~* %(q)s::text)
+          AND (%(journal)s::text IS NULL OR j.slug = %(journal)s::text)
         ORDER BY a.id, s.fetched_at DESC
     """
     with conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM ({sql}) t ORDER BY published_at DESC NULLS LAST "
-                    f"LIMIT %(limit)s OFFSET %(offset)s",
-                    {"q": q, "journal": journal, "limit": limit, "offset": offset})
+        try:
+            cur.execute(f"SELECT * FROM ({sql}) t ORDER BY published_at DESC NULLS LAST "
+                        f"LIMIT %(limit)s OFFSET %(offset)s",
+                        {"q": q, "journal": journal, "limit": limit, "offset": offset})
+        except Exception as exc:
+            _guard_regex(exc)
         return _rows(cur)
 
 
@@ -551,7 +572,8 @@ def get_article(conn, article_id: str, snapshot_id: int | None = None) -> dict |
 def browse_commenters(conn, *, q: str | None = None, limit: int = 200,
                       offset: int = 0) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute("""
+        try:
+            cur.execute("""
             SELECT c.author_nick AS nick,
                    count(DISTINCT c.id) AS comments,
                    count(DISTINCT c.article_id) AS articles,
@@ -564,11 +586,13 @@ def browse_commenters(conn, *, q: str | None = None, limit: int = 200,
             JOIN article a ON a.id = c.article_id
             JOIN journal j ON j.id = a.journal_id
             WHERE c.author_nick IS NOT NULL
-              AND (%(q)s IS NULL OR c.author_nick ILIKE '%%' || %(q)s || '%%')
+              AND (%(q)s::text IS NULL OR c.author_nick ~* %(q)s::text)
             GROUP BY c.author_nick
             ORDER BY comments DESC
             LIMIT %(limit)s OFFSET %(offset)s
-        """, {"q": q, "limit": limit, "offset": offset})
+            """, {"q": q, "limit": limit, "offset": offset})
+        except Exception as exc:
+            _guard_regex(exc)
         return _rows(cur)
 
 
