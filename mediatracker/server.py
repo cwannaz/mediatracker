@@ -135,7 +135,9 @@ class Server:
 
         elif cmd in ("dataset_stats", "browse_articles", "get_article",
                      "browse_commenters", "get_commenter", "browse_authors",
-                     "browse_sources"):
+                     "browse_sources", "list_personas", "get_persona",
+                     "create_persona", "add_alias", "remove_alias",
+                     "delete_persona", "link_nicks"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -209,7 +211,49 @@ class Server:
             return ok(cmd, **db.get_commenter(self.conn, msg["nick"], limit=limit))
         if cmd == "browse_authors":
             return ok(cmd, authors=db.browse_authors(self.conn, limit=limit))
-        return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
+        if cmd == "browse_sources":
+            return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
+        return self._personas(cmd, msg, limit)
+
+    def _personas(self, cmd: str, msg: dict, limit: int) -> str:
+        """Identity layer: group the nicknames of one person into a persona so
+        analysis runs on the person rather than on each pseudonym."""
+        if cmd == "list_personas":
+            return ok(cmd, personas=db.list_personas(self.conn))
+        if cmd == "get_persona":
+            p = db.get_persona(self.conn, int(msg["persona_id"]), limit=limit or 3000)
+            return ok(cmd, persona=p) if p else error(cmd, "persona not found")
+        if cmd == "create_persona":
+            pid = db.create_persona(self.conn, label=msg["label"], note=msg.get("note"))
+            return ok(cmd, persona_id=pid)
+        if cmd == "add_alias":
+            db.add_alias(self.conn, persona_id=int(msg["persona_id"]), nick=msg["nick"],
+                         journal_slug=msg.get("journal_slug", "*"),
+                         confidence=msg.get("confidence", "confirmed"),
+                         evidence=msg.get("evidence"),
+                         added_by=msg.get("added_by", "manual"))
+            return ok(cmd, persona=db.get_persona(self.conn, int(msg["persona_id"]), limit=0))
+        if cmd == "remove_alias":
+            db.remove_alias(self.conn, nick=msg["nick"],
+                            journal_slug=msg.get("journal_slug", "*"))
+            return ok(cmd, nick=msg["nick"])
+        if cmd == "delete_persona":
+            db.delete_persona(self.conn, int(msg["persona_id"]))
+            return ok(cmd, persona_id=msg["persona_id"])
+
+        # link_nicks: create-or-reuse a persona and attach several nicknames at once.
+        nicks = msg.get("nicks") or []
+        if not nicks:
+            return error(cmd, "no nicks given")
+        pid = msg.get("persona_id")
+        pid = int(pid) if pid else db.create_persona(
+            self.conn, label=msg.get("label") or nicks[0], note=msg.get("note"))
+        for n in nicks:
+            db.add_alias(self.conn, persona_id=pid, nick=n,
+                         confidence=msg.get("confidence", "confirmed"),
+                         evidence=msg.get("evidence"),
+                         added_by=msg.get("added_by", "manual"))
+        return ok(cmd, persona=db.get_persona(self.conn, pid, limit=0))
 
     def _update_source(self, msg: dict) -> str:
         slug = msg.get("journal")

@@ -221,6 +221,32 @@ CREATE TABLE IF NOT EXISTS scan_run (
 );
 CREATE INDEX IF NOT EXISTS scan_run_slug_idx ON scan_run (slug, requested_at DESC);
 
+-- A persona is one real person behind several pseudonyms (renames over the
+-- years, platform migrations, or different handles per journal). Analysis is
+-- meant to run on the persona, not on each nickname in isolation.
+CREATE TABLE IF NOT EXISTS persona (
+    id         BIGSERIAL PRIMARY KEY,
+    label      TEXT NOT NULL UNIQUE,      -- how we refer to this person
+    note       TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One nickname maps to at most one persona. journal_slug '*' means the mapping
+-- holds on every journal; a real slug scopes it (the same nickname on two
+-- journals is not necessarily the same human).
+CREATE TABLE IF NOT EXISTS persona_alias (
+    journal_slug TEXT NOT NULL DEFAULT '*',
+    nick         TEXT NOT NULL,
+    persona_id   BIGINT NOT NULL REFERENCES persona(id) ON DELETE CASCADE,
+    confidence   TEXT NOT NULL DEFAULT 'confirmed',  -- confirmed | probable | candidate
+    evidence     TEXT,                                -- why we believe it
+    added_by     TEXT NOT NULL DEFAULT 'manual',      -- manual | stylometry
+    added_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (journal_slug, nick)
+);
+CREATE INDEX IF NOT EXISTS persona_alias_persona_idx ON persona_alias (persona_id);
+
 -- Additive column upgrades (safe to run every boot).
 ALTER TABLE article_snapshot ADD COLUMN IF NOT EXISTS source TEXT;   -- news agency (Reuters/AFP/ATS…)
 ALTER TABLE article ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ;    -- when the article stopped being reachable
@@ -580,11 +606,15 @@ def browse_commenters(conn, *, q: str | None = None, limit: int = 200,
                    min(cs.posted_at) AS first_seen,
                    max(cs.posted_at) AS last_seen,
                    count(DISTINCT j.slug) AS journals,
-                   sum(cs.like_count) AS total_votes
+                   sum(cs.like_count) AS total_votes,
+                   max(pa.persona_id) AS persona_id,
+                   max(p.label) AS persona_label
             FROM comment c
             JOIN comment_snapshot cs ON cs.comment_id = c.id
             JOIN article a ON a.id = c.article_id
             JOIN journal j ON j.id = a.journal_id
+            LEFT JOIN persona_alias pa ON pa.nick = c.author_nick AND pa.journal_slug = '*'
+            LEFT JOIN persona p ON p.id = pa.persona_id
             WHERE c.author_nick IS NOT NULL
               AND (%(q)s::text IS NULL OR c.author_nick ~* %(q)s::text)
             GROUP BY c.author_nick
@@ -597,11 +627,106 @@ def browse_commenters(conn, *, q: str | None = None, limit: int = 200,
 
 
 def get_commenter(conn, nick: str, limit: int = 500) -> dict:
+    comments = comments_for_nicks(conn, [nick], limit=10 ** 9)
+    return {
+        "nick": nick,
+        "comments": comments[:limit],
+        "total": len(comments),
+        "persona": persona_for_nick(conn, nick),
+        "suggestions": suggest_aliases(conn, nick),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Personas: several nicknames -> one person, so analysis runs on the person
+# --------------------------------------------------------------------------- #
+
+def list_personas(conn) -> list[dict]:
+    """Personas with their aliases and merged activity totals."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT p.id, p.label, p.note,
+                   array_agg(pa.nick ORDER BY pa.nick) AS aliases,
+                   count(DISTINCT pa.nick) AS n_aliases
+            FROM persona p
+            LEFT JOIN persona_alias pa ON pa.persona_id = p.id
+            GROUP BY p.id, p.label, p.note
+            ORDER BY p.label
+        """)
+        personas = _rows(cur)
+        for p in personas:
+            p["aliases"] = [a for a in (p["aliases"] or []) if a]
+            p.update(_persona_totals(conn, p["aliases"]))
+        return personas
+
+
+def _persona_totals(conn, nicks: list[str]) -> dict:
+    if not nicks:
+        return {"comments": 0, "articles": 0, "first_seen": None,
+                "last_seen": None, "journals": 0, "total_votes": None}
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT count(DISTINCT c.id), count(DISTINCT c.article_id),
+                   min(cs.posted_at), max(cs.posted_at),
+                   count(DISTINCT j.slug), sum(cs.like_count)
+            FROM comment c
+            JOIN comment_snapshot cs ON cs.comment_id = c.id
+            JOIN article a ON a.id = c.article_id
+            JOIN journal j ON j.id = a.journal_id
+            WHERE c.author_nick = ANY(%s)
+        """, (nicks,))
+        n_c, n_a, first, last, n_j, votes = cur.fetchone()
+    return {"comments": n_c or 0, "articles": n_a or 0, "first_seen": first,
+            "last_seen": last, "journals": n_j or 0, "total_votes": votes}
+
+
+def persona_for_nick(conn, nick: str, journal_slug: str | None = None) -> dict | None:
+    """The persona a nickname belongs to, preferring a journal-scoped mapping."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT p.id, p.label, pa.confidence, pa.journal_slug
+            FROM persona_alias pa JOIN persona p ON p.id = pa.persona_id
+            WHERE pa.nick = %s AND pa.journal_slug IN ('*', COALESCE(%s, '*'))
+            ORDER BY (pa.journal_slug <> '*') DESC
+            LIMIT 1
+        """, (nick, journal_slug))
+        rows = _rows(cur)
+        if not rows:
+            return None
+        p = rows[0]
+        cur.execute("SELECT nick FROM persona_alias WHERE persona_id = %s ORDER BY nick", (p["id"],))
+        p["aliases"] = [r[0] for r in cur.fetchall()]
+        return p
+
+
+def get_persona(conn, persona_id: int, limit: int = 3000) -> dict | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, label, note FROM persona WHERE id = %s", (persona_id,))
+        rows = _rows(cur)
+        if not rows:
+            return None
+        p = rows[0]
+        cur.execute("""
+            SELECT nick, journal_slug, confidence, evidence, added_by, added_at
+            FROM persona_alias WHERE persona_id = %s ORDER BY nick
+        """, (persona_id,))
+        p["alias_rows"] = _rows(cur)
+    nicks = [a["nick"] for a in p["alias_rows"]]
+    p["aliases"] = nicks
+    p.update(_persona_totals(conn, nicks))
+    p["comments_list"] = comments_for_nicks(conn, nicks, limit=limit)
+    return p
+
+
+def comments_for_nicks(conn, nicks: list[str], limit: int = 3000) -> list[dict]:
+    """Merged comment history across several nicknames, oldest first."""
+    if not nicks:
+        return []
     with conn.cursor() as cur:
         cur.execute("""
             SELECT DISTINCT ON (c.id)
-                   c.id, c.article_id, cs.posted_at, cs.body_text, cs.like_count,
-                   s.headline, j.slug AS journal, a.origin
+                   c.id, c.article_id, c.author_nick, cs.posted_at, cs.body_text,
+                   cs.like_count, s.headline, j.slug AS journal, a.origin
             FROM comment c
             JOIN comment_snapshot cs ON cs.comment_id = c.id
             JOIN article a ON a.id = c.article_id
@@ -610,11 +735,75 @@ def get_commenter(conn, nick: str, limit: int = 500) -> dict:
                 SELECT headline FROM article_snapshot
                 WHERE article_id = a.id ORDER BY fetched_at DESC LIMIT 1
             ) s ON true
-            WHERE c.author_nick = %s
+            WHERE c.author_nick = ANY(%s)
             ORDER BY c.id, cs.fetched_at DESC
-        """, (nick,))
-        comments = sorted(_rows(cur), key=lambda c: (c["posted_at"] is None, c["posted_at"]))
-        return {"nick": nick, "comments": comments[:limit], "total": len(comments)}
+        """, (nicks,))
+        rows = _rows(cur)
+    rows.sort(key=lambda c: (c["posted_at"] is None, c["posted_at"]))
+    return rows[:limit]
+
+
+def create_persona(conn, *, label: str, note: str | None = None) -> int:
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO persona (label, note) VALUES (%s, %s)
+            ON CONFLICT (label) DO UPDATE SET note = COALESCE(EXCLUDED.note, persona.note),
+                                              updated_at = now()
+            RETURNING id
+        """, (label, note))
+        return cur.fetchone()[0]
+
+
+def add_alias(conn, *, persona_id: int, nick: str, journal_slug: str = "*",
+              confidence: str = "confirmed", evidence: str | None = None,
+              added_by: str = "manual") -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO persona_alias (journal_slug, nick, persona_id, confidence, evidence, added_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (journal_slug, nick) DO UPDATE SET
+                persona_id = EXCLUDED.persona_id,
+                confidence = EXCLUDED.confidence,
+                evidence   = COALESCE(EXCLUDED.evidence, persona_alias.evidence),
+                added_by   = EXCLUDED.added_by,
+                added_at   = now()
+        """, (journal_slug, nick, persona_id, confidence, evidence, added_by))
+
+
+def remove_alias(conn, *, nick: str, journal_slug: str = "*") -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM persona_alias WHERE nick = %s AND journal_slug = %s",
+                    (nick, journal_slug))
+
+
+def delete_persona(conn, persona_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM persona WHERE id = %s", (persona_id,))
+
+
+def suggest_aliases(conn, nick: str, limit: int = 12) -> list[dict]:
+    """Cheap, transparent candidates for the same person: other nicknames whose
+    normalized spelling (letters/digits only, lowercased) is identical or nested.
+    This is a spelling heuristic only — it catches renames like
+    'C est pas mal hein' -> 'C-est-pas-mal-hein', not stylometric matches."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH norm AS (
+                SELECT DISTINCT author_nick AS nick,
+                       regexp_replace(lower(author_nick), '[^a-z0-9]', '', 'g') AS key
+                FROM comment WHERE author_nick IS NOT NULL
+            ), target AS (SELECT key FROM norm WHERE nick = %s LIMIT 1)
+            SELECT n.nick, n.key,
+                   (SELECT count(*) FROM comment c WHERE c.author_nick = n.nick) AS comments
+            FROM norm n, target t
+            WHERE n.nick <> %s
+              AND (n.key = t.key OR n.key LIKE '%%' || t.key || '%%' OR t.key LIKE '%%' || n.key || '%%')
+              -- both keys must be substantial: a 1-2 char key is a substring of
+              -- almost anything and would match unrelated nicknames.
+              AND length(t.key) > 3 AND length(n.key) > 3
+            ORDER BY comments DESC LIMIT %s
+        """, (nick, nick, limit))
+        return _rows(cur)
 
 
 def browse_authors(conn, *, limit: int = 200) -> list[dict]:
@@ -655,6 +844,7 @@ def dataset_stats(conn) -> dict:
         out["authors"] = cur.fetchone()[0]
         cur.execute("SELECT count(DISTINCT source) FROM article_snapshot WHERE source IS NOT NULL AND source <> ''")
         out["sources"] = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM persona"); out["personas"] = cur.fetchone()[0]
         cur.execute("SELECT origin, count(*) FROM article GROUP BY origin")
         out["by_origin"] = dict(cur.fetchall())
         cur.execute("SELECT min(posted_at)::date, max(posted_at)::date FROM comment_snapshot")

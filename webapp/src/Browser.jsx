@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from 'react'
 import ArticleView from './ArticleView.jsx'
 import CommenterView from './CommenterView.jsx'
+import PersonaView from './PersonaView.jsx'
 
 const SUBTABS = [
   { id: 'articles', label: 'Articles', statKey: 'articles' },
   { id: 'commenters', label: 'Commenters', statKey: 'commenters' },
+  { id: 'people', label: 'People', statKey: 'personas' },
   { id: 'authors', label: 'Authors', statKey: 'authors' },
   { id: 'sources', label: 'Sources', statKey: 'sources' },
 ]
@@ -20,6 +22,7 @@ export default function Browser({ connected, send }) {
   // Selected entity opens a detail view; null shows the list.
   const [openArticle, setOpenArticle] = useState(null)
   const [openNick, setOpenNick] = useState(null)
+  const [openPersona, setOpenPersona] = useState(null)
 
   useEffect(() => {
     if (!connected) return
@@ -27,6 +30,7 @@ export default function Browser({ connected, send }) {
   }, [connected, send])
 
   const showNick = useCallback((nick) => { setTab('commenters'); setOpenNick(nick) }, [])
+  const showPersona = useCallback((id) => { setTab('people'); setOpenPersona(id) }, [])
 
   return (
     <>
@@ -34,7 +38,7 @@ export default function Browser({ connected, send }) {
         {SUBTABS.map((t) => (
           <button key={t.id} className="subtab" role="tab"
             aria-selected={tab === t.id}
-            onClick={() => { setTab(t.id); setOpenArticle(null); setOpenNick(null) }}>
+            onClick={() => { setTab(t.id); setOpenArticle(null); setOpenNick(null); setOpenPersona(null) }}>
             {t.label}
             {stats?.[t.statKey] != null && <span className="count">{stats[t.statKey]}</span>}
           </button>
@@ -54,8 +58,17 @@ export default function Browser({ connected, send }) {
         {connected && tab === 'commenters' && (
           openNick
             ? <CommenterView nick={openNick} send={send}
-                onBack={() => setOpenNick(null)} onArticle={(id) => { setTab('articles'); setOpenArticle(id) }} />
+                onBack={() => setOpenNick(null)} onPersona={showPersona}
+                onArticle={(id) => { setTab('articles'); setOpenArticle(id) }} />
             : <CommenterList send={send} onOpen={setOpenNick} />
+        )}
+
+        {connected && tab === 'people' && (
+          openPersona
+            ? <PersonaView personaId={openPersona} send={send}
+                onBack={() => setOpenPersona(null)} onNick={showNick}
+                onArticle={(id) => { setTab('articles'); setOpenArticle(id) }} />
+            : <PersonaList send={send} onOpen={setOpenPersona} />
         )}
 
         {connected && tab === 'authors' && <AuthorList send={send} />}
@@ -135,13 +148,14 @@ function CommenterList({ send, onOpen }) {
       {!rows ? <div className="empty">Loading…</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>Nickname</th><th className="num">Comments</th><th className="num">Articles</th>
+            <th>Nickname</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
             <th>First seen</th><th>Last seen</th><th className="num">Journals</th><th className="num">Votes</th>
           </tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.nick} className="rowlink" onClick={() => onOpen(c.nick)}>
                 <td><strong>{c.nick}</strong></td>
+                <td>{c.persona_label || <span className="subtle">—</span>}</td>
                 <td className="num">{c.comments}</td>
                 <td className="num">{c.articles}</td>
                 <td>{fmtDate(c.first_seen)}</td>
@@ -154,6 +168,39 @@ function CommenterList({ send, onOpen }) {
         </table></div>
       )}
     </>
+  )
+}
+
+function PersonaList({ send, onOpen }) {
+  const [rows] = useQuery(send, 'list_personas', 'personas', {})
+  if (!rows) return <div className="empty">Loading…</div>
+  if (!rows.length) return (
+    <div className="empty">
+      No people defined yet. Open a commenter and use the Identity card to link
+      the nicknames that belong to the same person.
+    </div>
+  )
+  return (
+    <div className="table-wrap"><table>
+      <thead><tr>
+        <th>Person</th><th className="num">Aliases</th><th className="num">Comments</th>
+        <th className="num">Articles</th><th>First seen</th><th>Last seen</th>
+        <th className="num">Journals</th><th className="num">Votes</th>
+      </tr></thead>
+      <tbody>{rows.map((p) => (
+        <tr key={p.id} className="rowlink" onClick={() => onOpen(p.id)}>
+          <td><strong>{p.label}</strong>
+            <div className="subtle">{(p.aliases || []).join(', ')}</div></td>
+          <td className="num">{p.n_aliases}</td>
+          <td className="num">{p.comments}</td>
+          <td className="num">{p.articles}</td>
+          <td>{fmtDate(p.first_seen)}</td>
+          <td>{fmtDate(p.last_seen)}</td>
+          <td className="num">{p.journals}</td>
+          <td className="num">{p.total_votes ?? '—'}</td>
+        </tr>
+      ))}</tbody>
+    </table></div>
   )
 }
 

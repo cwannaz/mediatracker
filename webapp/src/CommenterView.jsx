@@ -4,15 +4,15 @@ import { languageMetrics } from './textmetrics.js'
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
 
-export default function CommenterView({ nick, send, onBack, onArticle }) {
+export default function CommenterView({ nick, send, onBack, onArticle, onPersona }) {
   const [data, setData] = useState(null)
+  const [picked, setPicked] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [shown, setShown] = useState(150)
 
-  useEffect(() => {
-    let alive = true
-    send('get_commenter', { nick, limit: 2000 })
-      .then((r) => { if (alive && r.ok) setData(r) }).catch(() => {})
-    return () => { alive = false }
-  }, [nick, send])
+  const load = () => send('get_commenter', { nick, limit: 2000 })
+    .then((r) => { if (r.ok) { setData(r); setPicked([]) } }).catch(() => {})
+  useEffect(() => { load() }, [nick, send]) // eslint-disable-line
 
   const comments = data?.comments || []
   const withText = comments.filter((c) => c.body_text)
@@ -42,6 +42,10 @@ export default function CommenterView({ nick, send, onBack, onArticle }) {
 
       <div className="panel-head"><h1>{nick}</h1>
         <span className="slug">{data.total} comments</span></div>
+
+      <Identity nick={nick} data={data} send={send} reload={load}
+        picked={picked} setPicked={setPicked} busy={busy} setBusy={setBusy}
+        onPersona={onPersona} />
 
       <div className="card">
         <h2>Metadata</h2>
@@ -100,7 +104,7 @@ export default function CommenterView({ nick, send, onBack, onArticle }) {
 
       <div className="card">
         <h2>Comments</h2>
-        {comments.length === 0 ? <div className="empty">None.</div> : comments.map((c) => (
+        {comments.length === 0 ? <div className="empty">None.</div> : comments.slice(0, shown).map((c) => (
           <div className="comment" key={c.id}>
             <div className="head">
               <span className="when">{c.posted_at ? fmt(c.posted_at) : 'date unknown'}</span>
@@ -115,6 +119,12 @@ export default function CommenterView({ nick, send, onBack, onArticle }) {
               : <div className="text missing">[body not recoverable from this capture]</div>}
           </div>
         ))}
+        {comments.length > shown && (
+          <button className="btn secondary" style={{ marginTop: 12 }}
+            onClick={() => setShown((n) => n + 300)}>
+            Show more ({comments.length - shown} remaining)
+          </button>
+        )}
       </div>
     </>
   )
@@ -122,4 +132,75 @@ export default function CommenterView({ nick, send, onBack, onArticle }) {
 
 function Metric({ k, v }) {
   return <div className="metric"><div className="v">{v}</div><div className="k">{k}</div></div>
+}
+
+// Identity: is this nickname already known to be one person's alias, and which
+// other nicknames look like the same handle re-spelled?
+function Identity({ nick, data, send, reload, picked, setPicked, busy, setBusy, onPersona }) {
+  const persona = data.persona
+  const suggestions = data.suggestions || []
+  const [label, setLabel] = useState(nick)
+
+  const toggle = (n) => setPicked((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n])
+
+  const link = async () => {
+    setBusy(true)
+    try {
+      await send('link_nicks', {
+        persona_id: persona?.id,
+        label: persona ? undefined : label,
+        nicks: persona ? picked : [nick, ...picked],
+        confidence: 'confirmed',
+        evidence: 'linked by hand in the GUI',
+      })
+      await reload()
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card">
+      <h2>Identity</h2>
+      {persona ? (
+        <p>
+          Part of <button className="backlink" style={{ padding: 0 }}
+            onClick={() => onPersona?.(persona.id)}>{persona.label}</button>
+          {' '}— {persona.aliases.length} aliases ({persona.confidence}).
+          Analysis for the whole person is on that page.
+        </p>
+      ) : (
+        <p className="subtle">Not linked to a person yet.</p>
+      )}
+
+      {suggestions.length > 0 && (
+        <>
+          <p className="subtle" style={{ marginTop: 8 }}>
+            Same handle, spelled differently — tick the ones that are the same person:
+          </p>
+          <div className="row" style={{ flexWrap: 'wrap', gap: 14, margin: '8px 0' }}>
+            {suggestions.map((s) => (
+              <label key={s.nick} className="checkbox">
+                <input type="checkbox" checked={picked.includes(s.nick)}
+                  onChange={() => toggle(s.nick)} />
+                {s.nick} <span className="subtle">({s.comments})</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="actions">
+        {!persona && picked.length > 0 && (
+          <input type="text" value={label} onChange={(e) => setLabel(e.target.value)}
+            style={{ maxWidth: 240 }} placeholder="Name for this person" />
+        )}
+        <button className="btn" disabled={busy || (!persona && picked.length === 0) || (persona && picked.length === 0)}
+          onClick={link}>
+          {persona ? 'Add selected to this person' : 'Link selected as one person'}
+        </button>
+      </div>
+      <p className="subtle" style={{ marginTop: 6 }}>
+        Suggestions are a spelling heuristic only — confirm before linking.
+      </p>
+    </div>
+  )
 }
