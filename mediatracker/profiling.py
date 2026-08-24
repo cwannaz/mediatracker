@@ -459,6 +459,25 @@ def main(argv=None) -> int:
         print(f"manifest: {OUT_DIR}/manifest.json")
     elif args.cmd == "ingest":
         man = {m["id"]: m for m in json.load(open(f"{OUT_DIR}/manifest.json"))}
+        # Dossier ids carry the subject's position in the manifest, so the
+        # manifest cannot be regenerated without renumbering profiles that are
+        # already written. Refresh each entry's measurements in place instead,
+        # matched on the subject itself, so the stored counts reflect the
+        # de-duplicated history the profiles were judged on.
+        fresh = {(s["kind"], s["key"]): s for s in build_subjects(conn, 1)}
+        refreshed = 0
+        for m in man.values():
+            s = fresh.get((m["kind"], m["key"]))
+            if not s:
+                continue
+            dated = [c["posted_at"] for c in s["comments"] if c["posted_at"]]
+            m["metrics"] = measure(s["comments"])
+            m["n_comments"] = m["metrics"]["n_comments"]
+            m["n_chars"] = m["metrics"]["n_chars"]
+            m["first_seen"] = str(dated[0]) if dated else None
+            m["last_seen"] = str(dated[-1]) if dated else None
+            refreshed += 1
+        print(f"measurements refreshed for {refreshed}/{len(man)} subjects")
         data = json.load(open(args.records, encoding="utf-8"))
         recs = data if isinstance(data, list) else [data]
         count, warns = ingest(conn, recs, man)
