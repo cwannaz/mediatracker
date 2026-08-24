@@ -274,6 +274,54 @@ CREATE TABLE IF NOT EXISTS author_profile (
 );
 
 -- Additive column upgrades (safe to run every boot).
+
+-- The comment namespace a title's readers write into. Nicknames are only
+-- comparable inside one community: two titles sharing a comment backend share
+-- their commenters, while the same nickname on two platforms is two people
+-- until something proves otherwise. Defaults to the slug — a title has its own
+-- community unless its adapter says otherwise.
+ALTER TABLE journal ADD COLUMN IF NOT EXISTS community TEXT;
+UPDATE journal SET community = slug WHERE community IS NULL;
+
+-- Profiles and persona clusters are scoped the same way. Everything profiled
+-- before this column existed was Le Matin: it was the only journal with data.
+ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
+ALTER TABLE persona ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
+
+-- persona_alias already scoped by journal, but '*' (every journal) is the wrong
+-- unit: a nickname is not portable across platforms. Re-key it on community.
+ALTER TABLE persona_alias ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
+
+-- ...which means the keys have to widen too, or one nickname could only ever
+-- exist in one community. Re-keying is a one-shot structural change, so each
+-- step checks the current key before touching it and is a no-op afterwards.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint
+               WHERE conname = 'author_profile_pkey'
+                 AND array_length(conkey, 1) = 2) THEN
+        ALTER TABLE author_profile DROP CONSTRAINT author_profile_pkey;
+        ALTER TABLE author_profile
+            ADD CONSTRAINT author_profile_pkey
+            PRIMARY KEY (community, subject_kind, subject_key);
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_constraint
+               WHERE conname = 'persona_alias_pkey'
+                 AND array_length(conkey, 1) = 2) THEN
+        ALTER TABLE persona_alias DROP CONSTRAINT persona_alias_pkey;
+        ALTER TABLE persona_alias
+            ADD CONSTRAINT persona_alias_pkey PRIMARY KEY (community, nick);
+    END IF;
+
+    -- A persona label is only unique within its own community.
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'persona_label_key') THEN
+        ALTER TABLE persona DROP CONSTRAINT persona_label_key;
+        ALTER TABLE persona ADD CONSTRAINT persona_community_label_key
+            UNIQUE (community, label);
+    END IF;
+END $$;
+
 ALTER TABLE article_snapshot ADD COLUMN IF NOT EXISTS source TEXT;   -- news agency (Reuters/AFP/ATS…)
 ALTER TABLE article ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ;    -- when the article stopped being reachable
 ALTER TABLE article ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'live';  -- 'live' | 'pdf'
@@ -299,20 +347,23 @@ def _jsonb(value: dict[str, Any] | None):
 
 
 def upsert_journal(conn, *, jid: str, slug: str, name: str, base_url: str,
-                   comment_system: str | None = None, config: dict | None = None) -> None:
+                   comment_system: str | None = None, config: dict | None = None,
+                   community: str | None = None) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO journal (id, slug, name, base_url, comment_system, config)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO journal (id, slug, name, base_url, comment_system, config, community)
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, %s))
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 base_url = EXCLUDED.base_url,
-                comment_system = COALESCE(EXCLUDED.comment_system, journal.comment_system)
+                comment_system = COALESCE(EXCLUDED.comment_system, journal.comment_system),
+                community = EXCLUDED.community
             -- NOTE: config is intentionally NOT overwritten here; the GUI owns it
             -- (see update_journal_config). Only the initial INSERT sets it.
             """,
-            (jid, slug, name, base_url, comment_system, _jsonb(config)),
+            (jid, slug, name, base_url, comment_system, _jsonb(config),
+             community, slug),
         )
 
 
@@ -838,60 +889,92 @@ def suggest_aliases(conn, nick: str, limit: int = 12) -> list[dict]:
         return _rows(cur)
 
 
-def get_profile(conn, *, nick: str | None = None, persona_id: int | None = None) -> dict | None:
+def get_profile(conn, *, nick: str | None = None, persona_id: int | None = None,
+                community: str | None = None) -> dict | None:
     """The analysis profile for a subject. A nickname that belongs to a persona
-    resolves to the persona's profile, since that is the analysed unit."""
+    resolves to the persona's profile, since that is the analysed unit.
+
+    A nickname only identifies someone inside one comment community, so without
+    `community` this can only answer when the nickname is unambiguous across
+    them. When it is not, the caller has to say which population it means.
+    """
     with conn.cursor() as cur:
         if persona_id is None and nick is not None:
-            cur.execute("SELECT persona_id FROM persona_alias WHERE nick = %s LIMIT 1", (nick,))
+            if community is not None:
+                cur.execute("SELECT persona_id FROM persona_alias "
+                            "WHERE nick = %s AND community = %s LIMIT 1", (nick, community))
+            else:
+                cur.execute("SELECT persona_id FROM persona_alias WHERE nick = %s LIMIT 1", (nick,))
             row = cur.fetchone()
             if row:
                 persona_id = row[0]
-        if persona_id is not None:
-            cur.execute("SELECT * FROM author_profile WHERE subject_kind='persona' AND subject_key=%s",
-                        (str(persona_id),))
+        kind = "persona" if persona_id is not None else "nick"
+        key = str(persona_id) if persona_id is not None else nick
+        if community is not None:
+            cur.execute("SELECT * FROM author_profile WHERE community=%s "
+                        "AND subject_kind=%s AND subject_key=%s", (community, kind, key))
         else:
-            cur.execute("SELECT * FROM author_profile WHERE subject_kind='nick' AND subject_key=%s",
-                        (nick,))
+            cur.execute("SELECT * FROM author_profile WHERE subject_kind=%s "
+                        "AND subject_key=%s ORDER BY n_comments DESC", (kind, key))
         rows = _rows(cur)
+        if len(rows) > 1:
+            log.info("nickname %r profiled in %d communities; caller did not say which",
+                     key, len(rows))
         return rows[0] if rows else None
 
 
-def profile_overview(conn) -> dict:
-    """Aggregate view of the profiled population — the sociological summary."""
+def profile_overview(conn, *, community: str | None = None) -> dict:
+    """Aggregate view of the profiled population — the sociological summary.
+
+    Communities are different publics and are not pooled by default in any way
+    that hides which is which: `communities` reports the split, and passing
+    `community` narrows every figure to one of them.
+    """
     out: dict = {}
+    # Every query below is filtered the same way. With no community given the
+    # clause is a no-op and the view spans all of them.
+    where = "community = %s" if community else "TRUE"
+    arg: tuple = (community,) if community else ()
+    out["community"] = community
     with conn.cursor() as cur:
-        cur.execute("SELECT count(*), count(*) FILTER (WHERE subject_kind='persona') FROM author_profile")
+        cur.execute("SELECT community, count(*) FROM author_profile GROUP BY 1 ORDER BY 2 DESC")
+        out["communities"] = _rows(cur)
+        cur.execute(f"SELECT count(*), count(*) FILTER (WHERE subject_kind='persona') "
+                    f"FROM author_profile WHERE {where}", arg)
         out["profiles"], out["personas"] = cur.fetchone()
-        cur.execute("""
+        cur.execute(f"""
             SELECT language->>'mastery' AS mastery, count(*)
-            FROM author_profile WHERE language ? 'mastery' GROUP BY 1 ORDER BY 2 DESC
-        """)
+            FROM author_profile WHERE language ? 'mastery' AND {where}
+            GROUP BY 1 ORDER BY 2 DESC
+        """, arg)
         out["mastery"] = _rows(cur)
-        cur.execute("""
+        cur.execute(f"""
             SELECT politics->>'overall' AS leaning, count(*)
-            FROM author_profile WHERE politics ? 'overall' GROUP BY 1 ORDER BY 2 DESC
-        """)
+            FROM author_profile WHERE politics ? 'overall' AND {where}
+            GROUP BY 1 ORDER BY 2 DESC
+        """, arg)
         out["politics"] = _rows(cur)
-        cur.execute("""
+        cur.execute(f"""
             SELECT CASE
                      WHEN (gender->>'male')::float   >= 0.6 THEN 'male'
                      WHEN (gender->>'female')::float >= 0.6 THEN 'female'
                      ELSE 'unknown' END AS g, count(*)
-            FROM author_profile WHERE gender ? 'male' GROUP BY 1 ORDER BY 2 DESC
-        """)
+            FROM author_profile WHERE gender ? 'male' AND {where}
+            GROUP BY 1 ORDER BY 2 DESC
+        """, arg)
         out["gender"] = _rows(cur)
-        cur.execute("""
+        cur.execute(f"""
             SELECT region->>'guess' AS region, count(*)
-            FROM author_profile WHERE region ? 'guess' GROUP BY 1 ORDER BY 2 DESC LIMIT 12
-        """)
+            FROM author_profile WHERE region ? 'guess' AND {where}
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 12
+        """, arg)
         out["region"] = _rows(cur)
         # Every subject, not a top-N: the population table sorts on any column
         # and the scatter needs the whole cloud. 319 rows is nothing to ship,
         # and it lets the distributions be recomputed with a subject excluded
         # without another round trip.
-        cur.execute("""
-            SELECT label, subject_kind, subject_key, n_comments, n_chars,
+        cur.execute(f"""
+            SELECT community, label, subject_kind, subject_key, n_comments, n_chars,
                    first_seen, last_seen,
                    language->>'mastery' AS mastery,
                    (language->>'error_rate_per_100_words')::float AS err,
@@ -905,18 +988,19 @@ def profile_overview(conn) -> dict:
                    gender->>'basis' AS gender_basis,
                    (gender->>'male')::float AS male,
                    (gender->>'female')::float AS female
-            FROM author_profile ORDER BY n_comments DESC
-        """)
+            FROM author_profile WHERE {where} ORDER BY n_comments DESC
+        """, arg)
         out["subjects"] = _rows(cur)
         # 'marked' turned out to be vanishingly rare once the pass was told not
         # to manufacture arcs, so 'mild' is where the real movement shows up.
         # Listing only 'marked' hid every subject who actually changed.
-        cur.execute("""
-            SELECT label, subject_kind, subject_key, politics->>'drift' AS drift,
+        cur.execute(f"""
+            SELECT community, label, subject_kind, subject_key,
+                   politics->>'drift' AS drift,
                    politics->'periods' AS periods
-            FROM author_profile WHERE politics->>'drift' IN ('marked', 'mild')
+            FROM author_profile WHERE politics->>'drift' IN ('marked', 'mild') AND {where}
             ORDER BY (politics->>'drift' = 'marked') DESC, n_comments DESC LIMIT 25
-        """)
+        """, arg)
         out["drifters"] = _rows(cur)
     return out
 

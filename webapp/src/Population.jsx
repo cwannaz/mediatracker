@@ -25,6 +25,7 @@ export default function Population({ send, onNick, onPersona }) {
   const [err, setErr] = useState(null)
   const [view, setView] = useState('overview')
   const [excluded, setExcluded] = useState([])
+  const [community, setCommunity] = useState(null)   // null = all of them
 
   useEffect(() => {
     let live = true
@@ -36,8 +37,12 @@ export default function Population({ send, onNick, onPersona }) {
   }, [send])
 
   const all = d?.subjects || []
+  const communities = d?.communities || []
+  const inScope = useMemo(
+    () => (community ? all.filter((s) => s.community === community) : all),
+    [all, community])
   const shown = useMemo(
-    () => all.filter((s) => !excluded.includes(key(s))), [all, excluded])
+    () => inScope.filter((s) => !excluded.includes(key(s))), [inScope, excluded])
 
   if (err) return <div className="banner warn">{err}</div>
   if (!d) return <div className="empty">Loading…</div>
@@ -49,6 +54,10 @@ export default function Population({ send, onNick, onPersona }) {
 
   return (
     <>
+      {communities.length > 1 && (
+        <Communities list={communities} value={community} onChange={setCommunity} />
+      )}
+
       <nav className="subtabs inner" role="tablist" aria-label="Population views">
         {VIEWS.map((v) => (
           <button key={v.id} className="subtab" role="tab" aria-selected={view === v.id}
@@ -59,16 +68,54 @@ export default function Population({ send, onNick, onPersona }) {
         ))}
       </nav>
 
-      <Concentration all={all} excluded={excluded} setExcluded={setExcluded} />
+      <Concentration all={inScope} excluded={excluded} setExcluded={setExcluded} />
 
       {view === 'overview'
-        ? <Overview d={d} subjects={shown} open={open} />
-        : <SubjectTable subjects={shown} open={open} />}
+        ? <Overview d={d} subjects={shown} open={open} showCommunity={!community} />
+        : <SubjectTable subjects={shown} open={open} showCommunity={!community} />}
     </>
   )
 }
 
-const key = (s) => `${s.subject_kind}:${s.subject_key}`
+// A nickname identifies someone only inside its own comment community, so the
+// community has to be part of the key: two platforms can each have a "Marie03"
+// and they are two different people.
+const key = (s) => `${s.community}:${s.subject_kind}:${s.subject_key}`
+
+const COMMUNITY_LABEL = {
+  lematin: 'Le Matin',
+  'tx-romandie': '24 heures / Tribune de Genève',
+}
+const communityName = (c) => COMMUNITY_LABEL[c] || c
+
+// Separate platforms mean separate registrations, so these are separate
+// publics: they are never silently pooled. Showing all of them together is
+// still useful — it is just always labelled as a sum of distinct populations.
+function Communities({ list, value, onChange }) {
+  const total = list.reduce((a, c) => a + c.count, 0)
+  return (
+    <div className="card note">
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="subtle">Population:</span>
+        <button className={'chip' + (value === null ? ' on' : '')}
+          onClick={() => onChange(null)}>All · {total}</button>
+        {list.map((c) => (
+          <button key={c.community} className={'chip' + (value === c.community ? ' on' : '')}
+            onClick={() => onChange(c.community)}>
+            {communityName(c.community)} · {c.count}
+          </button>
+        ))}
+      </div>
+      <div className="subtle" style={{ marginTop: 6 }}>
+        {value === null
+          ? 'These are separate commenting platforms. The same nickname on two of'
+            + ' them is two people until something proves otherwise, so "All" is a'
+            + ' sum of distinct populations rather than one merged public.'
+          : 'Narrowed to one platform. Nicknames are only comparable within it.'}
+      </div>
+    </div>
+  )
+}
 
 // How much of the corpus one writer accounts for. The archive is built from
 // articles someone printed, and people print the threads they took part in, so
@@ -181,6 +228,9 @@ function Overview({ d, subjects, open }) {
 
 const COLUMNS = [
   { id: 'label', label: 'Subject', align: 'left' },
+  // Only meaningful when several platforms are in view; a nickname is not
+  // comparable across them, so the table has to say which one a row is from.
+  { id: 'community', label: 'Platform', communityOnly: true },
   { id: 'n_comments', label: 'Comments', num: true },
   { id: 'avg_words', label: 'Avg words / comment', num: true, dp: 1 },
   { id: 'mastery', label: 'Mastery', order: MASTERY_ORDER },
@@ -193,9 +243,11 @@ const COLUMNS = [
   { id: 'gender', label: 'Gender' },
 ]
 
-function SubjectTable({ subjects, open }) {
+function SubjectTable({ subjects, open, showCommunity }) {
   const [sort, setSort] = useState({ col: 'n_comments', dir: 'desc' })
   const [q, setQ] = useState('')
+  const cols = useMemo(
+    () => COLUMNS.filter((c) => showCommunity || !c.communityOnly), [showCommunity])
 
   const rows = useMemo(() => {
     let r = subjects.map((s) => ({
@@ -227,7 +279,7 @@ function SubjectTable({ subjects, open }) {
       </div>
       <div className="table-wrap"><table className="sortable">
         <thead><tr>
-          {COLUMNS.map((c) => (
+          {cols.map((c) => (
             <th key={c.id} className={(c.num ? 'num ' : '') + 'sortcol'}
               aria-sort={sort.col === c.id ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
               onClick={() => click(c)}>
@@ -240,6 +292,7 @@ function SubjectTable({ subjects, open }) {
           <tr key={key(s)} className="rowlink" onClick={() => open(s)}>
             <td><strong>{s.label}</strong>
               {s.subject_kind === 'persona' && <span className="chip">person</span>}</td>
+            {showCommunity && <td className="subtle">{communityName(s.community)}</td>}
             <td className="num">{s.n_comments}</td>
             <td className="num">{s.avg_words != null ? s.avg_words.toFixed(1) : '—'}</td>
             <td>{s.mastery || '—'}</td>

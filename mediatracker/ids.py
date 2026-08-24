@@ -64,6 +64,16 @@ def comment_id(journal_slug: str, art_id: str, source_comment_id: str) -> str:
     return _sha(f"comment:{journal_slug.strip().lower()}:{art_id}:{source_comment_id}")
 
 
+def shared_comment_id(community: str, source_comment_id: str) -> str:
+    """For sources whose comment ids are unique across a whole comment backend.
+
+    Two titles sharing that backend serve the same thread on the same article,
+    so keying the comment to the article row would store it once per title and
+    double every commenter's volume. The comment's identity is its own id.
+    """
+    return _sha(f"ccomment:{community.strip().lower()}:{source_comment_id}")
+
+
 def synthetic_comment_id(art_id: str, author: str, posted_at: str, body: str) -> str:
     """Fallback when a source exposes no per-comment id: derive one from the
     tuple that uniquely identifies the comment on the page."""

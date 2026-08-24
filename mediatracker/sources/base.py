@@ -65,10 +65,26 @@ class Source:
     base_url: str = ""             # e.g. "https://www.lematin.ch"
     comment_system: str | None = None  # 'native' | 'coral' | 'disqus' | ...
 
+    # The comment namespace this title's readers write into. Nicknames are only
+    # comparable inside one of these: "Marie03" on two different platforms is
+    # two people until something proves otherwise, while two titles sharing one
+    # comment backend really do share their commenters. Defaults to the slug —
+    # a title has its own community unless it says otherwise.
+    community: str | None = None
+
+    # True when the source's own comment id identifies a comment across the
+    # whole community rather than only within one article. Titles that share a
+    # backend then store one row for one comment instead of one per title.
+    comment_ids_global: bool = False
+
     def __init__(self, *, base_url: str | None = None) -> None:
         # Per-journal base_url override (edited in the GUI) shadows the class default.
         if base_url:
             self.base_url = base_url.rstrip("/")
+
+    @property
+    def community_key(self) -> str:
+        return self.community or self.slug
 
     async def discover(self, fetcher) -> list[str]:
         """Return candidate article URLs to (re-)check this cycle — typically

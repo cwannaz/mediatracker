@@ -518,6 +518,16 @@ class TxAstroSource(Source):
 
     comment_system = "native"
 
+    # 24 heures and the Tribune de Genève are two front-ends over one content
+    # pool AND one comment backend: the same article id on both sites returns
+    # the same thread, comment UUIDs included. They are therefore one community
+    # of commenters, not two — verified by fetching one article's thread from
+    # both hosts and getting identical ids and nicknames back.
+    community = "tx-romandie"
+    # Those ids are UUIDs, unique across the whole backend, so a comment seen
+    # through either title is one row rather than one per title.
+    comment_ids_global = True
+
     # Section fronts crawled alongside the homepage. The homepage surfaces the
     # day's selection only; without these, whole desks are never seen.
     sections: tuple[str, ...] = ()

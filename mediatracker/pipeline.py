@@ -102,11 +102,13 @@ class Pipeline:
             db.upsert_journal(
                 self.conn, jid=jid, slug=source.slug, name=source.name,
                 base_url=source.base_url, comment_system=source.comment_system,
+                community=source.community_key,
             )
         else:
             self.store.append("journal", {
                 "id": jid, "slug": source.slug, "name": source.name,
                 "base_url": source.base_url, "comment_system": source.comment_system,
+                "community": source.community_key,
             })
 
     async def _ingest_article(self, source: Source, url: str, stats: IngestStats,
@@ -134,7 +136,7 @@ class Pipeline:
 
         comments = await self._safe_comments(source, article)
         for c in comments:
-            self._write_comment(source.slug, aid, c, stats)
+            self._write_comment(source, aid, c, stats)
 
     def _write_article(self, jid, aid, canon, article: ParsedArticle, chash, stats) -> int | None:
         fields = {
@@ -189,14 +191,26 @@ class Pipeline:
             log.warning("[%s] comment fetch failed: %s", source.slug, exc)
             return []
 
-    def _write_comment(self, slug: str, aid: str, c: ParsedComment, stats) -> None:
+    def _write_comment(self, source: Source, aid: str, c: ParsedComment, stats) -> None:
         stats.comments_seen += 1
+        # Where two titles share one comment backend the comment is one thing
+        # seen twice, so its id must not depend on which title's article row we
+        # reached it through — otherwise every shared commenter's volume
+        # doubles. `comment.article_id` then names the title we saw it on
+        # first, and the upsert leaves it alone afterwards.
+        community = source.community_key
+        shared = source.comment_ids_global
+
+        def ident(key: str) -> str:
+            return (ids.shared_comment_id(community, key) if shared
+                    else ids.comment_id(source.slug, aid, key))
+
         if c.source_key:
-            cid = ids.comment_id(slug, aid, c.source_key)
+            cid = ident(c.source_key)
         else:
             cid = ids.synthetic_comment_id(
                 aid, c.author_nick or "", str(c.posted_at or ""), c.body_text or "")
-        parent = ids.comment_id(slug, aid, c.parent_source_key) if c.parent_source_key else None
+        parent = ident(c.parent_source_key) if c.parent_source_key else None
         # Include the reaction distribution so evolving votes (which keep changing
         # even after commenting is disabled) always produce a fresh snapshot — the
         # latest snapshot is then the final vote distribution.

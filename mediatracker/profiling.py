@@ -86,10 +86,19 @@ _BARE_FORMS = {b for _, b in _ACC_PAIRS}
 # --------------------------------------------------------------------------- #
 
 def build_subjects(conn, min_comments: int = 5) -> list[dict]:
-    """One row per analysis subject with its full comment history."""
+    """One row per analysis subject with its full comment history.
+
+    A subject is a nickname *within one comment community*, never a nickname on
+    its own. "Marie03" on Le Matin and "Marie03" on the TX Romandie sites are
+    two subjects until something proves they are one person: separate platforms
+    mean separate registrations, and nothing links the two accounts. Titles that
+    genuinely share a comment backend share a community, so a commenter there
+    stays one subject however many of those titles they post on.
+    """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT COALESCE(pa.persona_id::text, c.author_nick)      AS key,
+            SELECT j.community                                       AS community,
+                   COALESCE(pa.persona_id::text, c.author_nick)      AS key,
                    (pa.persona_id IS NOT NULL)                       AS is_persona,
                    COALESCE(p.label, c.author_nick)                  AS label,
                    c.author_nick, cs.posted_at, cs.body_text, cs.like_count,
@@ -104,7 +113,9 @@ def build_subjects(conn, min_comments: int = 5) -> list[dict]:
             ) cs ON true
             JOIN article a  ON a.id = c.article_id
             JOIN journal j  ON j.id = a.journal_id
-            LEFT JOIN persona_alias pa ON pa.nick = c.author_nick
+            -- An alias cluster holds inside one community only.
+            LEFT JOIN persona_alias pa
+                   ON pa.nick = c.author_nick AND pa.community = j.community
             LEFT JOIN persona p ON p.id = pa.persona_id
             LEFT JOIN LATERAL (
                 SELECT headline FROM article_snapshot
@@ -116,16 +127,19 @@ def build_subjects(conn, min_comments: int = 5) -> list[dict]:
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
-    subjects: dict[str, dict] = {}
+    subjects: dict[tuple[str, str], dict] = {}
     for r in rows:
-        s = subjects.setdefault(r["key"], {
+        s = subjects.setdefault((r["community"], r["key"]), {
+            "community": r["community"],
             "key": r["key"],
             "kind": "persona" if r["is_persona"] else "nick",
             "label": r["label"],
             "aliases": set(),
+            "journals": set(),
             "comments": [],
         })
         s["aliases"].add(r["author_nick"])
+        s["journals"].add(r["journal"])
         s["comments"].append(r)
 
     out = []
@@ -134,6 +148,9 @@ def build_subjects(conn, min_comments: int = 5) -> list[dict]:
         if len(s["comments"]) < min_comments:
             continue
         s["aliases"] = sorted(s["aliases"])
+        # Which titles in the community this subject actually writes on — the
+        # regional tell where the titles share a backend but not a local desk.
+        s["journals"] = sorted(s["journals"])
         out.append(s)
     out.sort(key=lambda s: -len(s["comments"]))
     return out
@@ -323,6 +340,7 @@ def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
         lines = [
             f"SUBJECT: {s['label']}",
             f"kind: {s['kind']}   aliases: {', '.join(s['aliases'])}",
+            f"community: {s['community']}   writes on: {', '.join(s['journals'])}",
             f"comments: {m['n_comments']}   chars: {m['n_chars']}",
             "",
             "=== COMMENTS (chronological; verbatim, typos are intentional) ===",
@@ -346,8 +364,9 @@ def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
         manifest.append({
-            "id": sid, "kind": s["kind"], "key": s["key"], "label": s["label"],
-            "aliases": s["aliases"], "dossier": path,
+            "id": sid, "community": s["community"], "kind": s["kind"],
+            "key": s["key"], "label": s["label"],
+            "aliases": s["aliases"], "journals": s["journals"], "dossier": path,
             "n_comments": m["n_comments"], "n_chars": m["n_chars"],
             "n_duplicates_dropped": s.get("n_duplicates", 0),
             "dossier_sampled": sampled,
@@ -429,11 +448,11 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO author_profile
-                    (subject_kind, subject_key, label, n_comments, n_chars,
+                    (community, subject_kind, subject_key, label, n_comments, n_chars,
                      first_seen, last_seen, metrics, language, gender, politics,
                      philosophy, region, topics, notes, model, computed_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
-                ON CONFLICT (subject_kind, subject_key) DO UPDATE SET
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                ON CONFLICT (community, subject_kind, subject_key) DO UPDATE SET
                     label=EXCLUDED.label, n_comments=EXCLUDED.n_comments,
                     n_chars=EXCLUDED.n_chars, first_seen=EXCLUDED.first_seen,
                     last_seen=EXCLUDED.last_seen, metrics=EXCLUDED.metrics,
@@ -442,6 +461,10 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                     region=EXCLUDED.region, topics=EXCLUDED.topics,
                     notes=EXCLUDED.notes, model=EXCLUDED.model, computed_at=now()
             """, (
+                # Profiles written before communities existed were all Le Matin,
+                # which is what the column defaults to; a manifest entry from
+                # before that migration has no community of its own.
+                meta.get("community", "lematin"),
                 meta["kind"], meta["key"], meta["label"], meta["n_comments"],
                 meta["n_chars"], meta["first_seen"], meta["last_seen"],
                 db._jsonb(meta["metrics"]), db._jsonb(p.get("language")),
@@ -483,10 +506,14 @@ def main(argv=None) -> int:
         # already written. Refresh each entry's measurements in place instead,
         # matched on the subject itself, so the stored counts reflect the
         # de-duplicated history the profiles were judged on.
-        fresh = {(s["kind"], s["key"]): s for s in build_subjects(conn, 1)}
+        fresh = {(s["community"], s["kind"], s["key"]): s
+                 for s in build_subjects(conn, 1)}
         refreshed = 0
         for m in man.values():
-            s = fresh.get((m["kind"], m["key"]))
+            # A manifest written before communities existed carries none; those
+            # subjects were all Le Matin, the only journal with data then.
+            m.setdefault("community", "lematin")
+            s = fresh.get((m["community"], m["kind"], m["key"]))
             if not s:
                 continue
             dated = [c["posted_at"] for c in s["comments"] if c["posted_at"]]

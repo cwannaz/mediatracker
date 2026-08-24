@@ -28,6 +28,7 @@ def all_slugs() -> list[str]:
 
 # Import adapters so they self-register. Add new journals here.
 from . import lematin  # noqa: E402,F401
+from . import tribune_de_geneve  # noqa: E402,F401
 from . import vingtquatre_heures  # noqa: E402,F401
 
 __all__ = [

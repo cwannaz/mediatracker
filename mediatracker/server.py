@@ -215,11 +215,12 @@ class Server:
         if cmd == "browse_sources":
             return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
         if cmd == "profile_overview":
-            return ok(cmd, **db.profile_overview(self.conn))
+            return ok(cmd, **db.profile_overview(self.conn, community=msg.get("community")))
         if cmd == "get_profile":
             pid = msg.get("persona_id")
             prof = db.get_profile(self.conn, nick=msg.get("nick"),
-                                  persona_id=int(pid) if pid is not None else None)
+                                  persona_id=int(pid) if pid is not None else None,
+                                  community=msg.get("community"))
             return ok(cmd, profile=prof)
         return self._personas(cmd, msg, limit)
 
