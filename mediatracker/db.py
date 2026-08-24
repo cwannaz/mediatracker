@@ -247,6 +247,32 @@ CREATE TABLE IF NOT EXISTS persona_alias (
 );
 CREATE INDEX IF NOT EXISTS persona_alias_persona_idx ON persona_alias (persona_id);
 
+-- One profile per analysis SUBJECT: a persona when the nicknames have been
+-- linked, otherwise a bare nickname. `metrics` is computed deterministically
+-- from the stored text; the other JSONB columns hold LLM-inferred attributes,
+-- each carrying its own probabilities/confidence and supporting quotes, so an
+-- inference is never mistaken for a measurement.
+CREATE TABLE IF NOT EXISTS author_profile (
+    subject_kind TEXT NOT NULL,          -- 'persona' | 'nick'
+    subject_key  TEXT NOT NULL,          -- persona id (text) | nickname
+    label        TEXT NOT NULL,
+    n_comments   INTEGER,
+    n_chars      INTEGER,
+    first_seen   TIMESTAMPTZ,
+    last_seen    TIMESTAMPTZ,
+    metrics      JSONB NOT NULL DEFAULT '{}',   -- deterministic style measures
+    language     JSONB NOT NULL DEFAULT '{}',   -- grammar/conjugation/mastery
+    gender       JSONB NOT NULL DEFAULT '{}',   -- probabilities + basis
+    politics     JSONB NOT NULL DEFAULT '{}',   -- overall + per-period drift
+    philosophy   JSONB NOT NULL DEFAULT '{}',
+    region       JSONB NOT NULL DEFAULT '{}',
+    topics       JSONB NOT NULL DEFAULT '{}',
+    notes        TEXT,
+    model        TEXT,
+    computed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (subject_kind, subject_key)
+);
+
 -- Additive column upgrades (safe to run every boot).
 ALTER TABLE article_snapshot ADD COLUMN IF NOT EXISTS source TEXT;   -- news agency (Reuters/AFP/ATS…)
 ALTER TABLE article ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ;    -- when the article stopped being reachable
@@ -804,6 +830,71 @@ def suggest_aliases(conn, nick: str, limit: int = 12) -> list[dict]:
             ORDER BY comments DESC LIMIT %s
         """, (nick, nick, limit))
         return _rows(cur)
+
+
+def get_profile(conn, *, nick: str | None = None, persona_id: int | None = None) -> dict | None:
+    """The analysis profile for a subject. A nickname that belongs to a persona
+    resolves to the persona's profile, since that is the analysed unit."""
+    with conn.cursor() as cur:
+        if persona_id is None and nick is not None:
+            cur.execute("SELECT persona_id FROM persona_alias WHERE nick = %s LIMIT 1", (nick,))
+            row = cur.fetchone()
+            if row:
+                persona_id = row[0]
+        if persona_id is not None:
+            cur.execute("SELECT * FROM author_profile WHERE subject_kind='persona' AND subject_key=%s",
+                        (str(persona_id),))
+        else:
+            cur.execute("SELECT * FROM author_profile WHERE subject_kind='nick' AND subject_key=%s",
+                        (nick,))
+        rows = _rows(cur)
+        return rows[0] if rows else None
+
+
+def profile_overview(conn) -> dict:
+    """Aggregate view of the profiled population — the sociological summary."""
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*), count(*) FILTER (WHERE subject_kind='persona') FROM author_profile")
+        out["profiles"], out["personas"] = cur.fetchone()
+        cur.execute("""
+            SELECT language->>'mastery' AS mastery, count(*)
+            FROM author_profile WHERE language ? 'mastery' GROUP BY 1 ORDER BY 2 DESC
+        """)
+        out["mastery"] = _rows(cur)
+        cur.execute("""
+            SELECT politics->>'overall' AS leaning, count(*)
+            FROM author_profile WHERE politics ? 'overall' GROUP BY 1 ORDER BY 2 DESC
+        """)
+        out["politics"] = _rows(cur)
+        cur.execute("""
+            SELECT CASE
+                     WHEN (gender->>'male')::float   >= 0.6 THEN 'male'
+                     WHEN (gender->>'female')::float >= 0.6 THEN 'female'
+                     ELSE 'unknown' END AS g, count(*)
+            FROM author_profile WHERE gender ? 'male' GROUP BY 1 ORDER BY 2 DESC
+        """)
+        out["gender"] = _rows(cur)
+        cur.execute("""
+            SELECT region->>'guess' AS region, count(*)
+            FROM author_profile WHERE region ? 'guess' GROUP BY 1 ORDER BY 2 DESC LIMIT 12
+        """)
+        out["region"] = _rows(cur)
+        cur.execute("""
+            SELECT label, subject_kind, subject_key, n_comments,
+                   language->>'mastery' AS mastery,
+                   (language->>'error_rate_per_100_words')::float AS err,
+                   politics->>'overall' AS leaning, politics->>'drift' AS drift
+            FROM author_profile ORDER BY n_comments DESC LIMIT 60
+        """)
+        out["top"] = _rows(cur)
+        cur.execute("""
+            SELECT label, subject_kind, subject_key, politics->'periods' AS periods
+            FROM author_profile WHERE politics->>'drift' = 'marked'
+            ORDER BY n_comments DESC LIMIT 25
+        """)
+        out["drifters"] = _rows(cur)
+    return out
 
 
 def browse_authors(conn, *, limit: int = 200) -> list[dict]:
