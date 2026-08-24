@@ -219,10 +219,15 @@ def measure(comments: list[dict]) -> dict:
     # both is inconsistent, and each miss is a real mistake.
     correct_acc = sum(freq[w] for w in _ACC_FORMS if w in freq)
     missing_acc = sum(freq[b] for b in _BARE_FORMS if b in freq)
-    if correct_acc == 0:
+    # Only ~100 word pairs are checkable, so silence is not proof. Saying
+    # "full" because no bare form turned up would claim a writer accents
+    # everything on the strength of words they never used.
+    if correct_acc == 0 and missing_acc == 0:
+        accent_style, accent_consistency = None, None
+    elif correct_acc == 0:
         accent_style, accent_consistency = "absent", None
     elif missing_acc == 0:
-        accent_style, accent_consistency = "full", 1.0
+        accent_style, accent_consistency = "full-in-sample", 1.0
     else:
         accent_style = "partial"
         accent_consistency = round(correct_acc / (correct_acc + missing_acc), 3)
@@ -372,9 +377,23 @@ def _reconcile(p: dict, meta: dict) -> list[str]:
     if isinstance(lang, dict):
         measured = (meta.get("metrics") or {}).get("accent_style")
         stated = lang.get("accent_usage")
-        if measured and stated and measured != stated:
-            # 'absent' vs 'partial' decides whether omissions count as errors,
-            # so the measured value wins and the disagreement is recorded.
+        # Only two measured verdicts are positive proof: 'partial' (the writer
+        # accents some words and leaves others bare) and 'absent' (words
+        # needing accents appear, always bare). 'full-in-sample' is the absence
+        # of a counter-example among a hundred checkable words, which cannot
+        # overrule a reading of the whole text.
+        #
+        # 'partial' additionally has to be a habit rather than a slip: a writer
+        # who accents 40 words and misses one is careful, and relabelling them
+        # would turn every later omission into a counted error on the strength
+        # of a single typo.
+        metrics = meta.get("metrics") or {}
+        if measured == "partial":
+            systematic = (metrics.get("accent_missing_hits", 0) >= 2
+                          and (metrics.get("accent_consistency") or 1.0) <= 0.9)
+            if not systematic:
+                measured = None
+        if measured in ("partial", "absent") and stated and measured != stated:
             lang["accent_usage"] = measured
             lang["accent_usage_stated"] = stated
             warn.append(f"{meta['id']}: accent_usage {stated!r} -> measured {measured!r}")
