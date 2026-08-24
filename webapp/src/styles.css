@@ -239,3 +239,47 @@ h3.sub { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
 .distrow .fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .distrow .n { flex: 0 0 40px; text-align: right; font-variant-numeric: tabular-nums; }
 .distrow .pct { flex: 0 0 40px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---- population: inner subtabs, sortable table, figures --------------- */
+
+.subtabs.inner { margin: 0 0 14px; border-bottom: 1px solid var(--border-soft); }
+
+.card.note { border-left: 3px solid var(--brand-gold); }
+
+table.sortable th.sortcol { cursor: pointer; user-select: none; white-space: nowrap; }
+table.sortable th.sortcol:hover { color: var(--text); }
+table.sortable th .arrow { margin-left: 5px; font-size: 9px; color: var(--brand-gold); }
+table.sortable th[aria-sort="none"] .arrow { color: transparent; }
+
+.figwrap { overflow-x: auto; }
+/* Cap the width: an SVG stretched to a wide screen scales its text with it. */
+svg.compass { width: 100%; max-width: 920px; min-width: 620px; height: auto;
+              display: block; margin: 0 auto; }
+svg.compass .grid { stroke: var(--border-soft); stroke-width: 1; }
+svg.compass .grid.mid { stroke-dasharray: 3 3; }
+svg.compass .axlab { fill: var(--muted); font-size: 10.5px; }
+svg.compass .axtitle { fill: var(--muted); font-size: 10px; letter-spacing: .04em;
+                       text-transform: uppercase; }
+svg.compass .dot { cursor: pointer; fill-opacity: .62; stroke-width: 1; }
+svg.compass .dot.on { fill-opacity: .95; stroke: var(--brand-gold); stroke-width: 2; }
+
+/* Gender is a study dimension, so it is what the colour carries. */
+.dot.g-m { fill: #5b8cff; stroke: #5b8cff; }
+.dot.g-f { fill: #e0699b; stroke: #e0699b; }
+.dot.g-u { fill: #7d8595; stroke: #7d8595; }
+
+.key { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.key i.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; opacity: .75; }
+/* The swatches are <i>, not SVG, so they need a background as well as a fill. */
+.key i.dot.g-m { background: #5b8cff; }
+.key i.dot.g-f { background: #e0699b; }
+.key i.dot.g-u { background: #7d8595; }
+
+.cantonmap { display: grid; grid-template-columns: repeat(3, 1fr);
+             grid-template-rows: repeat(4, 46px); gap: 6px; max-width: 340px; }
+.canton { border-radius: 7px; border: 1px solid var(--border-soft); padding: 6px 8px;
+          display: flex; flex-direction: column; justify-content: space-between;
+          background: color-mix(in srgb, var(--accent) calc(var(--fill) * 100%), var(--bg)); }
+.canton.empty { background: var(--bg); }
+.canton .nm { font-size: 10.5px; color: var(--muted); }
+.canton .ct { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }

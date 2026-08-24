@@ -1,17 +1,30 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import Compass from './Compass.jsx'
+import RegionMap from './RegionMap.jsx'
 
-// The population view: what the profiled commenters look like taken together.
-// This is the sociological output of the study, so the denominators matter as
-// much as the shares — "unknown" is reported as a real category, never hidden,
-// because most subjects genuinely leave no evidence of gender or region.
+// The profiled commenters taken together — the sociological output of the
+// study. Distributions are computed here from the full subject list rather
+// than server-side, so a subject can be excluded and everything recomputes
+// without another round trip.
+//
+// Denominators matter as much as shares: "unknown" is reported as a real
+// category, because most subjects genuinely leave no evidence of gender or
+// region and hiding that would overstate what the corpus can support.
 
 const LEANING_ORDER = ['far-left', 'left', 'centre-left', 'centre',
                        'centre-right', 'right', 'far-right', 'mixed', 'unclear']
 const MASTERY_ORDER = ['native-fluent', 'fluent', 'good', 'approximate', 'poor']
 
+const VIEWS = [
+  { id: 'overview', label: 'Global analysis' },
+  { id: 'subjects', label: 'Subjects' },
+]
+
 export default function Population({ send, onNick, onPersona }) {
   const [d, setD] = useState(null)
   const [err, setErr] = useState(null)
+  const [view, setView] = useState('overview')
+  const [excluded, setExcluded] = useState([])
 
   useEffect(() => {
     let live = true
@@ -22,25 +35,93 @@ export default function Population({ send, onNick, onPersona }) {
     return () => { live = false }
   }, [send])
 
+  const all = d?.subjects || []
+  const shown = useMemo(
+    () => all.filter((s) => !excluded.includes(key(s))), [all, excluded])
+
   if (err) return <div className="banner warn">{err}</div>
   if (!d) return <div className="empty">Loading…</div>
-  if (!d.profiles) return (
-    <div className="empty">
-      No profiles yet. Run the analysis pass to build them.
+  if (!all.length) return <div className="empty">No profiles yet. Run the analysis pass to build them.</div>
+
+  const open = (s) => s.subject_kind === 'persona'
+    ? onPersona?.(Number(s.subject_key))
+    : onNick?.(s.subject_key)
+
+  return (
+    <>
+      <nav className="subtabs inner" role="tablist" aria-label="Population views">
+        {VIEWS.map((v) => (
+          <button key={v.id} className="subtab" role="tab" aria-selected={view === v.id}
+            onClick={() => setView(v.id)}>
+            {v.label}
+            {v.id === 'subjects' && <span className="count">{shown.length}</span>}
+          </button>
+        ))}
+      </nav>
+
+      <Concentration all={all} excluded={excluded} setExcluded={setExcluded} />
+
+      {view === 'overview'
+        ? <Overview d={d} subjects={shown} open={open} />
+        : <SubjectTable subjects={shown} open={open} />}
+    </>
+  )
+}
+
+const key = (s) => `${s.subject_kind}:${s.subject_key}`
+
+// How much of the corpus one writer accounts for. The archive is built from
+// articles someone printed, and people print the threads they took part in, so
+// the heaviest subject is heavy by construction rather than by being typical.
+function Concentration({ all, excluded, setExcluded }) {
+  const total = all.reduce((s, x) => s + (x.n_comments || 0), 0)
+  const top = [...all].sort((a, b) => b.n_comments - a.n_comments)[0]
+  if (!top || !total) return null
+  const share = (top.n_comments / total) * 100
+  const next = [...all].sort((a, b) => b.n_comments - a.n_comments)[1]
+  if (share < 5) return null
+  const isOut = excluded.includes(key(top))
+
+  return (
+    <div className="card note">
+      <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <strong>{top.label}</strong> alone is {share.toFixed(1)}% of the analysed
+          comments ({top.n_comments} of {total.toLocaleString()})
+          {next && <> — {(top.n_comments / next.n_comments).toFixed(0)}× the next
+            subject, {next.label} ({next.n_comments})</>}.
+          <div className="subtle" style={{ marginTop: 4 }}>
+            Distributions below count each subject once, so they are unaffected.
+            Anything weighted by volume is not.
+          </div>
+        </div>
+        <label className="checkbox" style={{ whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={isOut}
+            onChange={() => setExcluded(isOut ? excluded.filter((k) => k !== key(top))
+                                              : [...excluded, key(top)])} />
+          Leave out of the figures
+        </label>
+      </div>
     </div>
   )
+}
 
-  const open = (r) => r.subject_kind === 'persona'
-    ? onPersona?.(Number(r.subject_key))
-    : onNick?.(r.subject_key)
+function Overview({ d, subjects, open }) {
+  const n = subjects.length
+  const genderOf = (s) => (s.male >= 0.6 ? 'male' : s.female >= 0.6 ? 'female' : 'unknown')
+  const drifters = (d.drifters || []).filter((r) =>
+    subjects.some((s) => key(s) === key(r)))
 
   return (
     <>
       <div className="card">
         <h2>Profiled population</h2>
         <div className="metrics">
-          <Metric k="Subjects profiled" v={d.profiles} />
-          <Metric k="Of which people (merged)" v={d.personas} />
+          <Metric k="Subjects profiled" v={n} />
+          <Metric k="Of which people (merged)"
+            v={subjects.filter((s) => s.subject_kind === 'persona').length} />
+          <Metric k="Comments analysed"
+            v={subjects.reduce((a, s) => a + (s.n_comments || 0), 0).toLocaleString()} />
         </div>
         <p className="subtle" style={{ marginTop: 12 }}>
           One subject is one writer: a person where nicknames have been linked,
@@ -49,23 +130,24 @@ export default function Population({ send, onNick, onPersona }) {
         </p>
       </div>
 
+      <Compass subjects={subjects} onOpen={open} />
+
       <div className="row2">
-        <Dist title="Gender" rows={d.gender} field="g" total={d.profiles}
+        <Dist title="Gender" rows={tally(subjects, genderOf)} total={n}
           note="Read only from French grammatical self-reference. Most writers never refer to themselves in a gendered way, so 'unknown' is expected to dominate." />
-        <Dist title="Language mastery" rows={d.mastery} field="mastery" total={d.profiles}
+        <Dist title="Language mastery" rows={tally(subjects, (s) => s.mastery)} total={n}
           order={MASTERY_ORDER}
           note="Command of grammar, syntax and vocabulary. Not typing accents is an input habit and is never counted against mastery." />
       </div>
 
       <div className="row2">
-        <Dist title="Political leaning" rows={d.politics} field="leaning" total={d.profiles}
+        <Dist title="Political leaning" rows={tally(subjects, (s) => s.leaning)} total={n}
           order={LEANING_ORDER}
           note="'unclear' means the comments carried no usable position — it is not a centre reading." />
-        <Dist title="Linguistic region" rows={d.region} field="region" total={d.profiles}
-          note="From helvetisms and local knowledge. Romandie-unspecified is the honest answer for most." />
+        <RegionMap subjects={subjects} />
       </div>
 
-      {(d.drifters || []).length > 0 && (
+      {drifters.length > 0 && (
         <div className="card">
           <h2>Changed position over time</h2>
           <p className="subtle">
@@ -76,8 +158,8 @@ export default function Population({ send, onNick, onPersona }) {
           </p>
           <div className="table-wrap"><table>
             <thead><tr><th>Subject</th><th>Trajectory</th></tr></thead>
-            <tbody>{d.drifters.map((r) => (
-              <tr key={r.subject_kind + r.subject_key} className="rowlink" onClick={() => open(r)}>
+            <tbody>{drifters.map((r) => (
+              <tr key={key(r)} className="rowlink" onClick={() => open(r)}>
                 <td><strong>{r.label}</strong>
                   {r.drift && <span className="chip">{r.drift}</span>}</td>
                 <td style={{ whiteSpace: 'normal' }}>
@@ -93,54 +175,137 @@ export default function Population({ send, onNick, onPersona }) {
           </table></div>
         </div>
       )}
-
-      <div className="card">
-        <h2>Most prolific profiled subjects</h2>
-        <div className="table-wrap"><table>
-          <thead><tr>
-            <th>Subject</th><th className="num">Comments</th><th>Mastery</th>
-            <th className="num">Err / 100w</th><th>Leaning</th><th>Drift</th>
-          </tr></thead>
-          <tbody>{(d.top || []).map((r) => (
-            <tr key={r.subject_kind + r.subject_key} className="rowlink" onClick={() => open(r)}>
-              <td><strong>{r.label}</strong>
-                {r.subject_kind === 'persona' && <span className="chip">person</span>}</td>
-              <td className="num">{r.n_comments}</td>
-              <td>{r.mastery || '—'}</td>
-              <td className="num">{r.err != null ? r.err.toFixed(2) : '—'}</td>
-              <td>{r.leaning || '—'}</td>
-              <td>{r.drift && r.drift !== 'none' ? r.drift : <span className="subtle">—</span>}</td>
-            </tr>
-          ))}</tbody>
-        </table></div>
-      </div>
     </>
   )
 }
 
-function Dist({ title, rows, field, total, note, order }) {
+const COLUMNS = [
+  { id: 'label', label: 'Subject', align: 'left' },
+  { id: 'n_comments', label: 'Comments', num: true },
+  { id: 'avg_words', label: 'Avg words / comment', num: true, dp: 1 },
+  { id: 'mastery', label: 'Mastery', order: MASTERY_ORDER },
+  { id: 'err', label: 'Err / 100w', num: true, dp: 2 },
+  { id: 'accents', label: 'Accents' },
+  { id: 'register', label: 'Register' },
+  { id: 'leaning', label: 'Leaning', order: LEANING_ORDER },
+  { id: 'drift', label: 'Drift' },
+  { id: 'region', label: 'Region' },
+  { id: 'gender', label: 'Gender' },
+]
+
+function SubjectTable({ subjects, open }) {
+  const [sort, setSort] = useState({ col: 'n_comments', dir: 'desc' })
+  const [q, setQ] = useState('')
+
+  const rows = useMemo(() => {
+    let r = subjects.map((s) => ({
+      ...s,
+      gender: s.male >= 0.6 ? `male ${Math.round(s.male * 100)}%`
+            : s.female >= 0.6 ? `female ${Math.round(s.female * 100)}%` : '—',
+      _g: s.male >= 0.6 ? s.male : s.female >= 0.6 ? -s.female : 0,
+    }))
+    if (q) {
+      let re
+      try { re = new RegExp(q, 'i') } catch { re = null }
+      if (re) r = r.filter((s) => re.test(s.label))
+    }
+    const col = COLUMNS.find((c) => c.id === sort.col)
+    const sign = sort.dir === 'asc' ? 1 : -1
+    return r.sort((a, b) => sign * cmp(a, b, col))
+  }, [subjects, sort, q])
+
+  const click = (c) => setSort((s) => s.col === c.id
+    ? { col: c.id, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+    : { col: c.id, dir: c.num ? 'desc' : 'asc' })
+
+  return (
+    <>
+      <div className="toolbar">
+        <input type="text" placeholder="Filter subjects (regex)" value={q}
+          onChange={(e) => setQ(e.target.value)} />
+        <span className="subtle">{rows.length} subject{rows.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="table-wrap"><table className="sortable">
+        <thead><tr>
+          {COLUMNS.map((c) => (
+            <th key={c.id} className={(c.num ? 'num ' : '') + 'sortcol'}
+              aria-sort={sort.col === c.id ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+              onClick={() => click(c)}>
+              {c.label}
+              <span className="arrow">{sort.col === c.id ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span>
+            </th>
+          ))}
+        </tr></thead>
+        <tbody>{rows.map((s) => (
+          <tr key={key(s)} className="rowlink" onClick={() => open(s)}>
+            <td><strong>{s.label}</strong>
+              {s.subject_kind === 'persona' && <span className="chip">person</span>}</td>
+            <td className="num">{s.n_comments}</td>
+            <td className="num">{s.avg_words != null ? s.avg_words.toFixed(1) : '—'}</td>
+            <td>{s.mastery || '—'}</td>
+            <td className="num">{s.err != null ? s.err.toFixed(2) : '—'}</td>
+            <td>{s.accents || '—'}</td>
+            <td>{s.register || '—'}</td>
+            <td>{s.leaning || '—'}</td>
+            <td>{s.drift && s.drift !== 'none' ? s.drift : <span className="subtle">—</span>}</td>
+            <td>{s.region || '—'}</td>
+            <td>{s.gender === '—' ? <span className="subtle">—</span> : s.gender}</td>
+          </tr>
+        ))}</tbody>
+      </table></div>
+    </>
+  )
+}
+
+// Sorting has to cope with three kinds of column: numbers, ordered categories
+// (mastery runs best-to-worst, not alphabetically) and plain text. Missing
+// values always sink to the bottom rather than sorting as "".
+function cmp(a, b, col) {
+  if (!col) return 0
+  if (col.id === 'gender') return (a._g || 0) - (b._g || 0)
+  const va = a[col.id], vb = b[col.id]
+  const na = va == null || va === '', nb = vb == null || vb === ''
+  if (na && nb) return 0
+  if (na) return 1
+  if (nb) return -1
+  if (col.num) return va - vb
+  if (col.order) {
+    const ia = col.order.indexOf(va), ib = col.order.indexOf(vb)
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+  }
+  return String(va).localeCompare(String(vb))
+}
+
+function tally(subjects, pick) {
+  const m = new Map()
+  for (const s of subjects) {
+    const k = pick(s) || 'unknown'
+    m.set(k, (m.get(k) || 0) + 1)
+  }
+  return [...m.entries()].map(([k, count]) => ({ k, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
+function Dist({ title, rows, total, note, order }) {
   let data = rows || []
   if (order) {
     data = [...data].sort((a, b) => {
-      const ia = order.indexOf(a[field]), ib = order.indexOf(b[field])
+      const ia = order.indexOf(a.k), ib = order.indexOf(b.k)
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
     })
   }
-  const peak = Math.max(1, ...data.map((r) => Number(r.count)))
+  const peak = Math.max(1, ...data.map((r) => r.count))
   return (
     <div className="card">
       <h2>{title}</h2>
-      {data.length === 0 ? <div className="empty">No data.</div> : data.map((r) => {
-        const n = Number(r.count)
-        return (
-          <div className="distrow" key={String(r[field])}>
-            <span className="lab">{r[field] || 'unknown'}</span>
-            <span className="track"><span className="fill" style={{ width: `${(n / peak) * 100}%` }} /></span>
-            <span className="n">{n}</span>
-            <span className="pct">{total ? `${Math.round((n / total) * 100)}%` : ''}</span>
-          </div>
-        )
-      })}
+      {data.length === 0 ? <div className="empty">No data.</div> : data.map((r) => (
+        <div className="distrow" key={r.k}>
+          <span className="lab">{r.k}</span>
+          <span className="track"><span className="fill" style={{ width: `${(r.count / peak) * 100}%` }} /></span>
+          <span className="n">{r.count}</span>
+          <span className="pct">{total ? `${Math.round((r.count / total) * 100)}%` : ''}</span>
+        </div>
+      ))}
       {note && <p className="subtle" style={{ marginTop: 10 }}>{note}</p>}
     </div>
   )

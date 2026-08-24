@@ -880,14 +880,28 @@ def profile_overview(conn) -> dict:
             FROM author_profile WHERE region ? 'guess' GROUP BY 1 ORDER BY 2 DESC LIMIT 12
         """)
         out["region"] = _rows(cur)
+        # Every subject, not a top-N: the population table sorts on any column
+        # and the scatter needs the whole cloud. 319 rows is nothing to ship,
+        # and it lets the distributions be recomputed with a subject excluded
+        # without another round trip.
         cur.execute("""
-            SELECT label, subject_kind, subject_key, n_comments,
+            SELECT label, subject_kind, subject_key, n_comments, n_chars,
+                   first_seen, last_seen,
                    language->>'mastery' AS mastery,
                    (language->>'error_rate_per_100_words')::float AS err,
-                   politics->>'overall' AS leaning, politics->>'drift' AS drift
-            FROM author_profile ORDER BY n_comments DESC LIMIT 60
+                   language->>'accent_usage' AS accents,
+                   language->>'register' AS register,
+                   (metrics->>'avg_words_per_comment')::float AS avg_words,
+                   (metrics->>'vocabulary_richness_ttr')::float AS ttr,
+                   politics->>'overall' AS leaning, politics->>'drift' AS drift,
+                   (politics->>'confidence')::float AS politics_confidence,
+                   region->>'guess' AS region,
+                   gender->>'basis' AS gender_basis,
+                   (gender->>'male')::float AS male,
+                   (gender->>'female')::float AS female
+            FROM author_profile ORDER BY n_comments DESC
         """)
-        out["top"] = _rows(cur)
+        out["subjects"] = _rows(cur)
         # 'marked' turned out to be vanishingly rare once the pass was told not
         # to manufacture arcs, so 'mild' is where the real movement shows up.
         # Listing only 'marked' hid every subject who actually changed.
