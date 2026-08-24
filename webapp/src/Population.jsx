@@ -71,13 +71,15 @@ export default function Population({ send, onNick, onPersona }) {
           <p className="subtle">
             Subjects whose recorded stance moves across periods. This is the
             trajectory the study is looking for, and it is rare — check each
-            against the comments before treating it as a finding.
+            against the comments before treating it as a finding. A period
+            marked <em>unclear</em> is a gap in the record, not a change.
           </p>
           <div className="table-wrap"><table>
             <thead><tr><th>Subject</th><th>Trajectory</th></tr></thead>
             <tbody>{d.drifters.map((r) => (
               <tr key={r.subject_kind + r.subject_key} className="rowlink" onClick={() => open(r)}>
-                <td><strong>{r.label}</strong></td>
+                <td><strong>{r.label}</strong>
+                  {r.drift && <span className="chip">{r.drift}</span>}</td>
                 <td style={{ whiteSpace: 'normal' }}>
                   {(r.periods || []).map((p, i) => (
                     <span key={i}>

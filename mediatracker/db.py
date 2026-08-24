@@ -888,10 +888,14 @@ def profile_overview(conn) -> dict:
             FROM author_profile ORDER BY n_comments DESC LIMIT 60
         """)
         out["top"] = _rows(cur)
+        # 'marked' turned out to be vanishingly rare once the pass was told not
+        # to manufacture arcs, so 'mild' is where the real movement shows up.
+        # Listing only 'marked' hid every subject who actually changed.
         cur.execute("""
-            SELECT label, subject_kind, subject_key, politics->'periods' AS periods
-            FROM author_profile WHERE politics->>'drift' = 'marked'
-            ORDER BY n_comments DESC LIMIT 25
+            SELECT label, subject_kind, subject_key, politics->>'drift' AS drift,
+                   politics->'periods' AS periods
+            FROM author_profile WHERE politics->>'drift' IN ('marked', 'mild')
+            ORDER BY (politics->>'drift' = 'marked') DESC, n_comments DESC LIMIT 25
         """)
         out["drifters"] = _rows(cur)
     return out
