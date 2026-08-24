@@ -241,7 +241,11 @@ function SourceList({ send }) {
       <thead><tr><th>Source / agency</th><th className="num">Articles</th><th>First</th><th>Last</th></tr></thead>
       <tbody>{rows.map((s) => (
         <tr key={s.source}>
-          <td>{s.source}</td><td className="num">{s.articles}</td>
+          <td><strong>{s.source}</strong>
+            {(s.variants || []).length > 0 && (
+              <div className="subtle">also bylined: {s.variants.join(', ')}</div>
+            )}</td>
+          <td className="num">{s.articles}</td>
           <td>{fmtDate(s.first_seen)}</td><td>{fmtDate(s.last_seen)}</td>
         </tr>
       ))}</tbody>

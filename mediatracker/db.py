@@ -913,15 +913,43 @@ def browse_authors(conn, *, limit: int = 200) -> list[dict]:
 
 
 def browse_sources(conn, *, limit: int = 200) -> list[dict]:
+    """Who supplied the news, one row per agency.
+
+    A byline is stored as it was published, and the same agency appears as
+    "AFP", "Agence France-Presse" and "afp/Newsnet" across the years. Grouping
+    happens here rather than in the stored value, so the spellings actually seen
+    stay visible in `variants`.
+    """
+    from .sources.tamedia import normalize_agency
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT s.source, count(DISTINCT s.article_id) AS articles,
                    min(s.published_at) AS first_seen, max(s.published_at) AS last_seen
             FROM article_snapshot s
             WHERE s.source IS NOT NULL AND s.source <> ''
-            GROUP BY s.source ORDER BY articles DESC LIMIT %s
-        """, (limit,))
-        return _rows(cur)
+            GROUP BY s.source
+        """)
+        merged: dict[str, dict] = {}
+        for r in _rows(cur):
+            name = normalize_agency(r["source"]) or r["source"]
+            m = merged.setdefault(name, {
+                "source": name, "articles": 0,
+                "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+                "variants": [],
+            })
+            m["articles"] += r["articles"]
+            if r["source"] != name:
+                m["variants"].append(r["source"])
+            for k, better in (("first_seen", min), ("last_seen", max)):
+                if r[k] and m[k]:
+                    m[k] = better(m[k], r[k])
+                elif r[k]:
+                    m[k] = r[k]
+    out = sorted(merged.values(), key=lambda m: -m["articles"])
+    for m in out:
+        m["variants"].sort()
+    return out[:limit]
 
 
 def dataset_stats(conn) -> dict:

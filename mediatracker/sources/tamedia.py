@@ -85,6 +85,41 @@ _TRAILING_AGENCY_RE = re.compile(
 )
 
 
+# The same agency is bylined several ways over the years ("AFP",
+# "Agence France-Presse", "afp/Newsnet"), which would otherwise split one
+# source into four rows when classifying who supplies the news. The byline is
+# kept verbatim; this is the grouping key that sits beside it.
+_AGENCY_CANON = {
+    "afp": "AFP", "agence france-presse": "AFP", "agence france presse": "AFP",
+    "ats": "ATS", "ats/keystone": "ATS", "keystone-ats": "ATS",
+    "keystone": "Keystone", "sda": "ATS",
+    "reuters": "Reuters", "thomson reuters": "Reuters",
+    "ap": "AP", "associated press": "AP",
+    "awp": "AWP", "dpa": "dpa", "bloomberg": "Bloomberg",
+    "efe": "EFE", "ansa": "ANSA", "apa": "APA",
+}
+
+
+def normalize_agency(source: str | None) -> str | None:
+    """Group the spellings of one news agency under a single name.
+
+    Bylines carry a desk suffix ("afp/Newsnet") or spell the agency out in
+    full, and staff-written pieces use a "comm/<initials>" form that is not an
+    agency at all. Returns None when the value does not name a known agency, so
+    the caller can fall back to the byline as written.
+    """
+    if not source:
+        return None
+    s = source.strip()
+    if s.lower() in _AGENCY_CANON:
+        return _AGENCY_CANON[s.lower()]
+    # "afp/Newsnet", "ats/Newsnet" — agency first, desk after.
+    head = s.split("/")[0].strip().lower()
+    if head in _AGENCY_CANON:
+        return _AGENCY_CANON[head]
+    return None
+
+
 def _detect_source(meta: dict, authors: list, text: str | None) -> str | None:
     """Best-effort news-agency detection so sources can be classified apart from
     human authors (the article's byline sometimes IS an agency, sometimes a human
