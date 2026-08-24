@@ -77,7 +77,8 @@ class Server:
             jid = ids.journal_id(slug)
             db.upsert_journal(self.conn, jid=jid, slug=slug, name=src.name,
                               base_url=src.base_url, comment_system=src.comment_system,
-                              config=self.cfg.default_schedule())
+                              config=self.cfg.default_schedule(),
+                              community=src.community_key)
             if not (db.get_journal_config(self.conn, jid) or {}):
                 db.update_journal_config(self.conn, jid, self.cfg.default_schedule())
 

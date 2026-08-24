@@ -1,4 +1,4 @@
-# 24 heures: the second TX Group platform
+# 24 heures and the Tribune de Genève: the second TX Group platform
 
 Diagnosed 2026-08-24, adapter built the same day. Superseded the earlier note
 that recorded only "comment `tenantId` still unknown" — the real situation was
@@ -88,6 +88,40 @@ document; nothing here writes to the site. The comment endpoints pass
 `/api/` for generic agents and the user has explicitly opted to collect
 comments (see DOCTRINE.md).
 
+## The two titles are one commenting community
+
+The Tribune de Genève runs the same Astro front-end — and the same backend.
+Fetching one article's comments from both hosts returns identical UUIDs and
+identical nicknames: `/apprentissage-…-633967257619` is one article with one
+thread, served by both sites. On a given day 218 of the ~270 articles on their
+fronts are shared; 51 are Geneva-only and 35 Vaud-only, and it is that local
+desk (`/geneve` vs `/vaud-regions`) which draws the readerships apart.
+
+So identity needs a unit above the title: the **community**, meaning the
+comment backend a nickname is registered in. `TxAstroSource.community` is
+`"tx-romandie"` for both titles; Le Matin, a different platform, is its own.
+Subjects, profiles, personas and alias clusters are all keyed by it:
+
+* the same nickname on Le Matin and on 24 heures is **two subjects**, never
+  pooled — separate platforms, separate registrations, nothing linking the
+  accounts. Seven nicknames currently appear in both and are counted twice on
+  purpose;
+* a commenter writing on both Astro titles is **one subject**, not two halves.
+  72 of the 117 tx-romandie subjects do exactly that.
+
+Comment ids follow: `ids.shared_comment_id(community, uuid)` where a backend's
+ids are unique across the whole community, so the id does not depend on which
+title's article row we reached the comment through. Without it every shared
+thread would be stored once per title. Verified on the first TDG scan: 2,138
+comments encountered, 799 new snapshots — the rest already stored via 24 heures
+— and 2,443 comment rows for 2,443 distinct UUIDs, i.e. no duplication at all.
+Le Matin keeps its per-article scheme untouched, and the two are proven
+disjoint by test.
+
+Both article rows are kept, because both titles really did publish the piece.
+`comment.article_id` names whichever title we saw the thread through first, and
+the upsert leaves it alone afterwards so it never flaps between scans.
+
 ## Known rough edges
 
 * Discovery crawls the homepage plus eight desk fronts and yields ~253 URLs.
@@ -96,6 +130,12 @@ comments (see DOCTRINE.md).
   `services-24heures`. They carry no comments. They are left in rather than
   denylisted: there is no structural signal distinguishing them, and a category
   denylist would silently drop a real desk if the site renamed one.
-* Comment volume is unknown territory — 24 heures may have a different
-  commenting culture from Le Matin, and the two corpora should not be pooled
-  without checking that first.
+* Which of the two titles a shared comment is filed under is an artefact of
+  scan order, not a fact about the commenter. What a subject's `journals` list
+  does say honestly is which titles they write on at all, and for someone who
+  only ever comments on Geneva-local or Vaud-local stories that is a real
+  regional signal — a better one than the title split would have been.
+* `browse_authors` and the commenter/persona views are still keyed on a bare
+  nickname, so for the seven nicknames present in both communities they resolve
+  to whichever profile has more comments (and log that they did). Those views
+  need a community alongside the nickname before that matters much.
