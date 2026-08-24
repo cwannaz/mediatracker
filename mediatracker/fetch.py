@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import http.cookiejar
 import logging
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -59,6 +61,13 @@ class Fetcher:
         self._last_hit: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
         self._host_locks: dict[str, asyncio.Lock] = {}
+        # Some sites answer the first request with a cookie and a redirect back
+        # to the same URL; without a jar that is an infinite loop returning an
+        # empty body. Requests run on worker threads, so the jar is guarded.
+        self._cookies = http.cookiejar.CookieJar()
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self._cookies))
+        self._opener_lock = threading.Lock()
 
     def _host(self, url: str) -> str:
         return urlsplit(url).netloc.lower()
@@ -98,7 +107,9 @@ class Fetcher:
             req_headers.update(headers)
         req = urllib.request.Request(url, headers=req_headers)
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            with self._opener_lock:
+                opener = self._opener
+            with opener.open(req, timeout=self._timeout) as r:
                 raw = r.read()
                 enc = (r.headers.get("Content-Encoding") or "").lower()
                 body = _decompress(raw, enc)
