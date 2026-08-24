@@ -251,23 +251,6 @@ table.sortable th.sortcol:hover { color: var(--text); }
 table.sortable th .arrow { margin-left: 5px; font-size: 9px; color: var(--brand-gold); }
 table.sortable th[aria-sort="none"] .arrow { color: transparent; }
 
-.figwrap { overflow-x: auto; }
-/* Cap the width: an SVG stretched to a wide screen scales its text with it. */
-svg.compass { width: 100%; max-width: 920px; min-width: 620px; height: auto;
-              display: block; margin: 0 auto; }
-svg.compass .grid { stroke: var(--border-soft); stroke-width: 1; }
-svg.compass .grid.mid { stroke-dasharray: 3 3; }
-svg.compass .axlab { fill: var(--muted); font-size: 10.5px; }
-svg.compass .axtitle { fill: var(--muted); font-size: 10px; letter-spacing: .04em;
-                       text-transform: uppercase; }
-svg.compass .dot { cursor: pointer; fill-opacity: .62; stroke-width: 1; }
-svg.compass .dot.on { fill-opacity: .95; stroke: var(--brand-gold); stroke-width: 2; }
-
-/* Gender is a study dimension, so it is what the colour carries. */
-.dot.g-m { fill: #5b8cff; stroke: #5b8cff; }
-.dot.g-f { fill: #e0699b; stroke: #e0699b; }
-.dot.g-u { fill: #7d8595; stroke: #7d8595; }
-
 .key { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .key i.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; opacity: .75; }
 /* The swatches are <i>, not SVG, so they need a background as well as a fill. */

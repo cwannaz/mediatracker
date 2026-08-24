@@ -1,122 +1,181 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 // Where the commenting public sits, as a cloud rather than a set of bars.
 //
 // X is the left–right axis; Y is command of the language. Those are the two
 // scales the pass produces that are genuinely ordered, so they are the two
-// that can carry a position. Dot area is comment volume.
+// that can carry a position. Marker area is comment volume, colour is gender.
 //
 // Subjects the pass would not place — 'mixed' (positions that do not sit on a
 // single axis) and 'unclear' (no usable evidence) — are deliberately NOT
 // plotted at the centre. Putting them there would invent a moderate reading
 // for people who simply never showed one. They are counted underneath instead.
+//
+// Plotly is loaded the same way the other dashboards in this family load it:
+// dynamically, so it stays out of the main bundle, and purged on unmount.
 
 const X = ['far-left', 'left', 'centre-left', 'centre', 'centre-right', 'right', 'far-right']
 const Y = ['native-fluent', 'fluent', 'good', 'approximate', 'poor']
 
-const W = 760, H = 340, PAD_L = 96, PAD_B = 42, PAD_T = 16, PAD_R = 16
+const GROUPS = [
+  { id: 'm', name: 'male', colour: '#5b8cff' },
+  { id: 'f', name: 'female', colour: '#e0699b' },
+  { id: 'u', name: 'no gender evidence', colour: '#7d8595' },
+]
+
+// A deterministic offset inside a cell: same data, same picture every render.
+// Without it 197 subjects collapse onto 35 grid points.
+function spread(i) {
+  const ring = Math.floor(Math.sqrt(i))
+  const around = i - ring * ring
+  const ang = (around / Math.max(1, 2 * ring + 1)) * Math.PI * 2 + ring
+  return [Math.cos(ang) * ring * 0.075, Math.sin(ang) * ring * 0.075]
+}
+
+// Held at module scope so cleanup can purge SYNCHRONOUSLY. Purging from
+// inside `import(...).then()` loses a race under StrictMode, which mounts
+// every effect twice: the first cleanup's promise resolves after the second
+// effect has drawn, and wipes the plot that is meant to stay. React runs
+// cleanup synchronously before the next effect, so doing it here cannot race.
+let PlotlyMod = null
+
+function themeColours() {
+  const cs = getComputedStyle(document.documentElement)
+  const v = (n, fallback) => (cs.getPropertyValue(n) || '').trim() || fallback
+  return {
+    bg: v('--surface-2', v('--bg', '#14151a')),
+    grid: v('--border-soft', '#23262f'),
+    text: v('--muted', '#9aa0ad'),
+  }
+}
 
 export default function Compass({ subjects, onOpen }) {
-  const [hover, setHover] = useState(null)
+  const ref = useRef(null)
+  const openRef = useRef(onOpen)
+  openRef.current = onOpen
 
-  const { dots, unplaced, maxN } = useMemo(() => {
-    const placed = [], out = []
+  const { placed, unplaced } = useMemo(() => {
+    const inside = [], out = []
+    const cells = new Map()
     for (const s of subjects) {
       const xi = X.indexOf(s.leaning), yi = Y.indexOf(s.mastery)
       if (xi < 0 || yi < 0) { out.push(s); continue }
-      placed.push({ s, xi, yi })
+      const k = `${xi}:${yi}`
+      const slot = cells.get(k) || 0
+      cells.set(k, slot + 1)
+      const [dx, dy] = spread(slot)
+      inside.push({ s, x: xi + dx, y: yi + dy })
     }
-    // Several subjects land on the same cell, so spread them inside it with a
-    // stable offset — same input, same picture every render.
-    const cells = new Map()
-    for (const p of placed) {
-      const k = `${p.xi}:${p.yi}`
-      const idx = cells.get(k) || 0
-      cells.set(k, idx + 1)
-      p.slot = idx
-    }
-    for (const p of placed) {
-      const total = cells.get(`${p.xi}:${p.yi}`)
-      const ring = Math.floor(Math.sqrt(p.slot))
-      const around = p.slot - ring * ring
-      const ang = (around / Math.max(1, 2 * ring + 1)) * Math.PI * 2 + ring
-      p.jx = total > 1 ? Math.cos(ang) * ring * 7.5 : 0
-      p.jy = total > 1 ? Math.sin(ang) * ring * 7.5 : 0
-    }
-    return {
-      dots: placed,
-      unplaced: out,
-      maxN: Math.max(1, ...placed.map((p) => p.s.n_comments || 1)),
-    }
+    return { placed: inside, unplaced: out }
   }, [subjects])
 
-  const px = (xi) => PAD_L + (xi + 0.5) * ((W - PAD_L - PAD_R) / X.length)
-  const py = (yi) => PAD_T + (yi + 0.5) * ((H - PAD_T - PAD_B) / Y.length)
-  const r = (n) => 3 + 13 * Math.sqrt((n || 1) / maxN)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let purged = false
+    let ro = null
 
-  const colour = (s) => (s.male >= 0.6 ? 'm' : s.female >= 0.6 ? 'f' : 'u')
+    ;(async () => {
+      const { default: Plotly } = await import('plotly.js-dist-min')
+      PlotlyMod = Plotly
+      if (purged) return
+      const c = themeColours()
+      const maxN = Math.max(1, ...placed.map((p) => p.s.n_comments || 1))
+
+      const group = (s) => (s.male >= 0.6 ? 'm' : s.female >= 0.6 ? 'f' : 'u')
+      const data = GROUPS.map((g) => {
+        const pts = placed.filter((p) => group(p.s) === g.id)
+        return {
+          name: g.name,
+          // 319 points is nothing; SVG markers style more predictably than
+          // scattergl and do not depend on WebGL being available.
+          type: 'scatter',
+          mode: 'markers',
+          x: pts.map((p) => p.x),
+          y: pts.map((p) => p.y),
+          customdata: pts.map((p) => [
+            p.s.label, p.s.leaning, p.s.mastery, p.s.n_comments,
+            p.s.avg_words == null ? '—' : p.s.avg_words.toFixed(0),
+            p.s.subject_kind, p.s.subject_key,
+          ]),
+          marker: {
+            color: g.colour,
+            opacity: 0.62,
+            line: { color: g.colour, width: 1 },
+            // Area, not radius, carries the volume — sizeref maps the largest
+            // subject to a readable disc and everything else in proportion.
+            size: pts.map((p) => Math.sqrt((p.s.n_comments || 1) / maxN)),
+            sizemode: 'diameter',
+            sizeref: 1 / 34,
+            sizemin: 4,
+          },
+          hovertemplate:
+            '<b>%{customdata[0]}</b><br>%{customdata[1]} · %{customdata[2]}'
+            + '<br>%{customdata[3]} comments · %{customdata[4]} words each<extra></extra>',
+        }
+      })
+
+      const layout = {
+        margin: { l: 128, r: 16, t: 8, b: 56 }, height: 380,
+        paper_bgcolor: c.bg, plot_bgcolor: c.bg,
+        hoverlabel: { bgcolor: c.bg, bordercolor: c.grid, font: { color: c.text } },
+        xaxis: {
+          range: [-0.6, X.length - 0.4], tickvals: X.map((_, i) => i), ticktext: X,
+          title: { text: 'political leaning', font: { size: 11 } },
+          color: c.text, gridcolor: c.grid, zeroline: false, automargin: true,
+        },
+        yaxis: {
+          // Best at the top: the y axis reads as a ranking, not a quantity.
+          range: [Y.length - 0.4, -0.6], tickvals: Y.map((_, i) => i), ticktext: Y,
+          title: { text: 'language mastery', font: { size: 11 }, standoff: 22 },
+          color: c.text, gridcolor: c.grid, zeroline: false, automargin: true,
+        },
+        legend: { orientation: 'h', y: -0.18, font: { color: c.text, size: 11 } },
+        font: { color: c.text, size: 11 },
+        shapes: [{
+          type: 'line', x0: 3, x1: 3, y0: -0.6, y1: Y.length - 0.4,
+          line: { color: c.grid, width: 1, dash: 'dot' },
+        }],
+      }
+
+      await Plotly.react(el, data, layout, { displayModeBar: false, responsive: true })
+      if (purged) return
+      el.removeAllListeners?.('plotly_click')
+      el.on('plotly_click', (ev) => {
+        const cd = ev?.points?.[0]?.customdata
+        if (cd) openRef.current?.({ subject_kind: cd[5], subject_key: cd[6] })
+      })
+
+      // `responsive` only watches the window, so a plot drawn before the tab's
+      // layout settles keeps a width its container never had and overflows.
+      // Watch the element itself instead.
+      ro = new ResizeObserver(() => { if (!purged) Plotly.Plots.resize(el) })
+      ro.observe(el)
+      Plotly.Plots.resize(el)
+    })()
+
+    return () => {
+      purged = true
+      ro?.disconnect()
+      if (PlotlyMod) {
+        try { PlotlyMod.purge(el) } catch { /* never drawn */ }
+      }
+    }
+  }, [placed])
 
   return (
     <div className="card">
       <h2>The commenting public</h2>
-      <div className="figwrap">
-        <svg viewBox={`0 0 ${W} ${H}`} className="compass" role="img"
-          aria-label="Scatter of subjects by political leaning and language mastery">
-          {Y.map((m, i) => (
-            <g key={m}>
-              <line x1={PAD_L} x2={W - PAD_R} y1={py(i)} y2={py(i)} className="grid" />
-              <text x={PAD_L - 10} y={py(i)} className="axlab" textAnchor="end"
-                dominantBaseline="middle">{m}</text>
-            </g>
-          ))}
-          {X.map((l, i) => (
-            <text key={l} x={px(i)} y={H - PAD_B + 18} className="axlab" textAnchor="middle">
-              {l.replace('centre-', 'c-').replace('far-', 'far ')}
-            </text>
-          ))}
-          <line x1={px(3)} x2={px(3)} y1={PAD_T} y2={H - PAD_B} className="grid mid" />
-
-          {dots.map((p) => (
-            <circle key={`${p.s.subject_kind}:${p.s.subject_key}`}
-              cx={px(p.xi) + p.jx} cy={py(p.yi) + p.jy} r={r(p.s.n_comments)}
-              className={`dot g-${colour(p.s)}${hover === p.s ? ' on' : ''}`}
-              onMouseEnter={() => setHover(p.s)} onMouseLeave={() => setHover(null)}
-              onClick={() => onOpen?.(p.s)}>
-              <title>{p.s.label} — {p.s.leaning}, {p.s.mastery}, {p.s.n_comments} comments</title>
-            </circle>
-          ))}
-
-          <text x={(W + PAD_L) / 2} y={H - 4} className="axtitle" textAnchor="middle">
-            political leaning
-          </text>
-          <text x={-(PAD_T + (H - PAD_B - PAD_T) / 2)} y={12} className="axtitle"
-            textAnchor="middle" transform="rotate(-90)">
-            language mastery
-          </text>
-        </svg>
-      </div>
-
-      <div className="row" style={{ gap: 18, flexWrap: 'wrap', marginTop: 6 }}>
-        <span className="key"><i className="dot g-m" /> male</span>
-        <span className="key"><i className="dot g-f" /> female</span>
-        <span className="key"><i className="dot g-u" /> no gender evidence</span>
-        <span className="subtle">dot size = comments written</span>
-      </div>
-
-      <p className="subtle" style={{ marginTop: 10 }}>
-        {hover
-          ? <><strong>{hover.label}</strong> — {hover.leaning}, {hover.mastery},{' '}
-              {hover.n_comments} comments, {hover.avg_words?.toFixed(0)} words each</>
-          : <>{dots.length} of {subjects.length} subjects are placed.{' '}
-              {unplaced.length} are not: {countOf(unplaced, 'mixed')} hold positions that do
-              not sit on a single left–right axis and {countOf(unplaced, 'unclear')} left no
-              usable evidence. They are left off rather than drawn at the centre,
-              which would read as moderate.</>}
+      <div ref={ref} style={{ width: '100%', minHeight: 380 }} />
+      <p className="subtle" style={{ marginTop: 6 }}>
+        Marker area is comments written; click one to open the subject.{' '}
+        {placed.length} of {subjects.length} subjects are placed.{' '}
+        {unplaced.length} are not: {unplaced.filter((s) => s.leaning === 'mixed').length} hold
+        positions that do not sit on a single left–right axis and{' '}
+        {unplaced.filter((s) => s.leaning === 'unclear').length} left no usable
+        evidence. They are left off rather than drawn at the centre, which would
+        read as moderate.
       </p>
     </div>
   )
-}
-
-function countOf(list, leaning) {
-  return list.filter((s) => s.leaning === leaning).length
 }
