@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { languageMetrics } from './textmetrics.js'
+import ProfilePanel from './ProfilePanel.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -88,19 +89,17 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
           Computed from {withText.length} comment{withText.length === 1 ? '' : 's'} with recoverable text.
           These are descriptive style measures, not a mastery score.
         </p>
-        <div style={{ marginTop: 14 }}>
-          <div className="metrics">
-            <Metric k="Probable gender" v={<span className="pending">not yet computed</span>} />
-            <Metric k="Political tendency" v={<span className="pending">not yet computed</span>} />
-            <Metric k="Philosophical leaning" v={<span className="pending">not yet computed</span>} />
-            <Metric k="Linguistic region" v={<span className="pending">not yet computed</span>} />
-          </div>
-          <p className="subtle" style={{ marginTop: 10 }}>
-            Inferred attributes (with probabilities and drift over time) come from the profiling pass,
-            which is not built yet.
-          </p>
-        </div>
       </div>
+
+      {data.persona
+        ? <div className="card">
+            <h2>Profile</h2>
+            <p className="subtle">
+              This nickname belongs to {data.persona.label}; the profile is built on
+              that person's whole body of writing.
+            </p>
+          </div>
+        : <ProfilePanel nick={nick} send={send} />}
 
       <div className="card">
         <h2>Comments</h2>

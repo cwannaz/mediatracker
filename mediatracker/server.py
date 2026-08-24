@@ -137,7 +137,8 @@ class Server:
                      "browse_commenters", "get_commenter", "browse_authors",
                      "browse_sources", "list_personas", "get_persona",
                      "create_persona", "add_alias", "remove_alias",
-                     "delete_persona", "link_nicks", "alias_candidates"):
+                     "delete_persona", "link_nicks", "alias_candidates",
+                     "get_profile", "profile_overview"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -213,6 +214,13 @@ class Server:
             return ok(cmd, authors=db.browse_authors(self.conn, limit=limit))
         if cmd == "browse_sources":
             return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
+        if cmd == "profile_overview":
+            return ok(cmd, **db.profile_overview(self.conn))
+        if cmd == "get_profile":
+            pid = msg.get("persona_id")
+            prof = db.get_profile(self.conn, nick=msg.get("nick"),
+                                  persona_id=int(pid) if pid is not None else None)
+            return ok(cmd, profile=prof)
         return self._personas(cmd, msg, limit)
 
     def _personas(self, cmd: str, msg: dict, limit: int) -> str:

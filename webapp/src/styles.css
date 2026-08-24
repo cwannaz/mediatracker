@@ -199,3 +199,43 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 .placeholder { padding: 60px 20px; text-align: center; color: var(--muted); }
+
+/* ---- profile panel -------------------------------------------------- */
+/* Inferred attributes. Quotes are shown verbatim so a reading can always be
+   traced back to the words it came from. */
+
+h3.sub { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+         color: var(--muted); margin: 16px 0 8px; font-weight: 600; }
+
+.axis { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border-soft);
+        font-size: 13px; }
+.axis:last-child { border-bottom: none; }
+.axis .k { flex: 0 0 150px; color: var(--muted); text-transform: capitalize; }
+.axis .v { flex: 1; }
+
+.evidence { border-left: 2px solid var(--border-soft); padding: 4px 0 4px 10px; margin: 8px 0; }
+.evidence .q { font-size: 13px; font-style: italic; }
+
+.period { display: flex; gap: 10px; align-items: baseline; padding: 5px 0;
+          border-bottom: 1px solid var(--border-soft); font-size: 13px; flex-wrap: wrap; }
+.period:last-child { border-bottom: none; }
+.period .when { flex: 0 0 150px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.period .lean { font-weight: 600; }
+
+/* Left–right placement. Drawn only when the pass committed to a position;
+   an absent scale means no evidence, which is not the same as "centre". */
+.scale { display: flex; gap: 3px; margin-top: 6px; }
+.scale .seg { flex: 1; height: 26px; border-radius: 4px; background: var(--surface-3);
+              display: flex; align-items: center; justify-content: center;
+              font-size: 11px; color: var(--muted); }
+.scale .seg.on { background: var(--brand-gold); color: #14151a; font-weight: 600; }
+
+/* ---- population distributions --------------------------------------- */
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+
+.distrow { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 12.5px; }
+.distrow .lab { flex: 0 0 160px; color: var(--muted); }
+.distrow .track { flex: 1; height: 9px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
+.distrow .fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.distrow .n { flex: 0 0 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.distrow .pct { flex: 0 0 40px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }

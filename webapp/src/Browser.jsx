@@ -3,12 +3,14 @@ import ArticleView from './ArticleView.jsx'
 import CommenterView from './CommenterView.jsx'
 import PersonaView from './PersonaView.jsx'
 import Aggregation from './Aggregation.jsx'
+import Population from './Population.jsx'
 
 const SUBTABS = [
   { id: 'articles', label: 'Articles', statKey: 'articles' },
   { id: 'commenters', label: 'Commenters', statKey: 'commenters' },
   { id: 'people', label: 'People', statKey: 'personas' },
   { id: 'aggregation', label: 'Aggregation' },
+  { id: 'population', label: 'Population', statKey: 'profiles' },
   { id: 'authors', label: 'Authors', statKey: 'authors' },
   { id: 'sources', label: 'Sources', statKey: 'sources' },
 ]
@@ -74,6 +76,10 @@ export default function Browser({ connected, send }) {
         )}
 
         {connected && tab === 'aggregation' && <Aggregation send={send} onPersona={showPersona} />}
+
+        {connected && tab === 'population' && (
+          <Population send={send} onNick={showNick} onPersona={showPersona} />
+        )}
 
         {connected && tab === 'authors' && <AuthorList send={send} />}
         {connected && tab === 'sources' && <SourceList send={send} />}

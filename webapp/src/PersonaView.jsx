@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { languageMetrics } from './textmetrics.js'
+import ProfilePanel from './ProfilePanel.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { if (!v) return '—'; try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -128,13 +129,9 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
         <p className="subtle" style={{ marginTop: 12 }}>
           Computed over {withText.length} comments from all aliases.
         </p>
-        <div className="metrics" style={{ marginTop: 14 }}>
-          <Metric k="Probable gender" v={<span className="pending">not yet computed</span>} />
-          <Metric k="Political tendency" v={<span className="pending">not yet computed</span>} />
-          <Metric k="Philosophical leaning" v={<span className="pending">not yet computed</span>} />
-          <Metric k="Linguistic region" v={<span className="pending">not yet computed</span>} />
-        </div>
       </div>
+
+      <ProfilePanel personaId={personaId} send={send} />
 
       <div className="card">
         <h2>Comments ({comments.length})</h2>

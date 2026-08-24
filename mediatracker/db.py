@@ -936,6 +936,7 @@ def dataset_stats(conn) -> dict:
         cur.execute("SELECT count(DISTINCT source) FROM article_snapshot WHERE source IS NOT NULL AND source <> ''")
         out["sources"] = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM persona"); out["personas"] = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM author_profile"); out["profiles"] = cur.fetchone()[0]
         cur.execute("SELECT origin, count(*) FROM article GROUP BY origin")
         out["by_origin"] = dict(cur.fetchall())
         cur.execute("SELECT min(posted_at)::date, max(posted_at)::date FROM comment_snapshot")

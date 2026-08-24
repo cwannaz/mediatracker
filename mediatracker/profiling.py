@@ -95,7 +95,13 @@ def build_subjects(conn, min_comments: int = 5) -> list[dict]:
                    c.author_nick, cs.posted_at, cs.body_text, cs.like_count,
                    j.slug AS journal, a.origin, art.headline
             FROM comment c
-            JOIN comment_snapshot cs ON cs.comment_id = c.id
+            -- latest snapshot only: a comment re-seen by a later scan has one
+            -- snapshot per scan, and joining them all would count it twice.
+            JOIN LATERAL (
+                SELECT posted_at, body_text, like_count
+                FROM comment_snapshot
+                WHERE comment_id = c.id ORDER BY fetched_at DESC LIMIT 1
+            ) cs ON true
             JOIN article a  ON a.id = c.article_id
             JOIN journal j  ON j.id = a.journal_id
             LEFT JOIN persona_alias pa ON pa.nick = c.author_nick
@@ -124,12 +130,51 @@ def build_subjects(conn, min_comments: int = 5) -> list[dict]:
 
     out = []
     for s in subjects.values():
+        s["comments"], s["n_duplicates"] = _dedupe(s["comments"])
         if len(s["comments"]) < min_comments:
             continue
         s["aliases"] = sorted(s["aliases"])
         out.append(s)
     out.sort(key=lambda s: -len(s["comments"]))
     return out
+
+
+def _fold_body(t: str) -> str:
+    """Accent/case/punctuation-insensitive key for spotting the same comment
+    captured twice."""
+    t = unicodedata.normalize("NFKD", t or "")
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", t.lower())).strip()
+
+
+def _dedupe(comments: list[dict]) -> tuple[list[dict], int]:
+    """Drop the same text by the same subject captured more than once.
+
+    The PDF archive holds several printings of the same article made years
+    apart, so one comment can be stored under several article ids. Those are
+    honest records of separate captures and stay in the database, but counting
+    a comment twice would inflate every measure, so the analysis sees one copy
+    — the earliest, which is closest to when it was written.
+    """
+    seen: dict[str, dict] = {}
+    ordered: list[dict] = []
+    dropped = 0
+    for c in comments:
+        key = _fold_body(c.get("body_text") or "")
+        if len(key) < 20:          # too short to identify reliably; keep as is
+            ordered.append(c)
+            continue
+        if key in seen:
+            dropped += 1
+            prev = seen[key]
+            if (c.get("posted_at") and prev.get("posted_at")
+                    and c["posted_at"] < prev["posted_at"]):
+                prev.update(c)      # keep the earliest occurrence
+            continue
+        seen[key] = c
+        ordered.append(c)
+    ordered.sort(key=lambda c: (c.get("posted_at") is None, c.get("posted_at")))
+    return ordered, dropped
 
 
 # --------------------------------------------------------------------------- #
@@ -233,6 +278,36 @@ def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:80]
 
 
+def _fit_to_budget(comments: list[dict], max_chars: int) -> tuple[list[dict], bool]:
+    """Choose which comments go in the dossier.
+
+    Taking the first N characters would hand the reader only the opening months
+    of a subject who wrote for a decade, which is exactly the case where drift
+    over time matters most. So when the history does not fit, spread the sample
+    evenly over the whole run and always keep both ends of the timeline.
+    """
+    total = sum(len(c.get("body_text") or "") for c in comments)
+    if total <= max_chars:
+        return comments, False
+
+    n = len(comments)
+    edge = min(15, n // 10)                     # anchor both ends of the period
+    head, tail = comments[:edge], comments[n - edge:]
+    middle = comments[edge:n - edge]
+    budget = max_chars - sum(len(c.get("body_text") or "") for c in head + tail)
+
+    picked: list[dict] = []
+    if middle and budget > 0:
+        stride = 1
+        while stride <= len(middle):
+            trial = middle[::stride]
+            if sum(len(c.get("body_text") or "") for c in trial) <= budget:
+                picked = trial
+                break
+            stride += 1
+    return head + picked + tail, True
+
+
 def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
     os.makedirs(f"{OUT_DIR}/dossiers", exist_ok=True)
     subjects = build_subjects(conn, min_comments)
@@ -247,17 +322,21 @@ def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
             "",
             "=== COMMENTS (chronological; verbatim, typos are intentional) ===",
         ]
-        used = 0
-        for c in s["comments"]:
+        dated = [c["posted_at"] for c in s["comments"] if c["posted_at"]]
+        span = (str(dated[0])[:10], str(dated[-1])[:10]) if dated else ("?", "?")
+        kept, sampled = _fit_to_budget(s["comments"], max_chars)
+        if sampled:
+            lines.insert(4, (
+                f"NOTE: this subject wrote too much to quote in full. The "
+                f"{len(kept)} comments below are an EVEN SAMPLE spread across "
+                f"the whole period ({m['n_comments']} in total), not the first "
+                f"ones — so the span really is {span[0]} to {span[1]} and any "
+                f"change over time is visible."))
+        for c in kept:
             ts = str(c["posted_at"])[:16] if c["posted_at"] else "date unknown"
             head = f"\n[{ts}] as «{c['author_nick']}» on: {(c['headline'] or '')[:90]}"
-            body = c["body_text"] or ""
-            if used + len(body) > max_chars:
-                lines.append(f"\n[… {m['n_comments'] - len(lines)} further comments omitted for length …]")
-                break
             lines.append(head)
-            lines.append(body)
-            used += len(body)
+            lines.append(c["body_text"] or "")
         path = f"{OUT_DIR}/dossiers/{sid}.txt"
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
@@ -265,8 +344,10 @@ def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
             "id": sid, "kind": s["kind"], "key": s["key"], "label": s["label"],
             "aliases": s["aliases"], "dossier": path,
             "n_comments": m["n_comments"], "n_chars": m["n_chars"],
-            "first_seen": str(s["comments"][0]["posted_at"]),
-            "last_seen": str(s["comments"][-1]["posted_at"]),
+            "n_duplicates_dropped": s.get("n_duplicates", 0),
+            "dossier_sampled": sampled,
+            "first_seen": str(dated[0]) if dated else None,
+            "last_seen": str(dated[-1]) if dated else None,
             "metrics": m,
         })
     with open(f"{OUT_DIR}/manifest.json", "w", encoding="utf-8") as fh:
@@ -278,13 +359,54 @@ def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
 # Ingest LLM output
 # --------------------------------------------------------------------------- #
 
-def ingest(conn, records: list[dict], manifest_by_id: dict) -> int:
+def _reconcile(p: dict, meta: dict) -> list[str]:
+    """Bring one profile in line with the rules before it is stored.
+
+    The reader of a dossier can misapply a label even when its judgement is
+    sound, so two things are checked against ground truth rather than trusted:
+    the accent label (the deterministic count knows whether accents appear at
+    all) and the gender rule (no evidence must mean no claim).
+    """
+    warn: list[str] = []
+    lang = p.get("language")
+    if isinstance(lang, dict):
+        measured = (meta.get("metrics") or {}).get("accent_style")
+        stated = lang.get("accent_usage")
+        if measured and stated and measured != stated:
+            # 'absent' vs 'partial' decides whether omissions count as errors,
+            # so the measured value wins and the disagreement is recorded.
+            lang["accent_usage"] = measured
+            lang["accent_usage_stated"] = stated
+            warn.append(f"{meta['id']}: accent_usage {stated!r} -> measured {measured!r}")
+
+    g = p.get("gender")
+    if isinstance(g, dict):
+        male, female = float(g.get("male") or 0), float(g.get("female") or 0)
+        if g.get("basis") in (None, "none") and (male >= 0.5 or female >= 0.5):
+            # A confident read with no stated basis is exactly the inference
+            # from topic or tone the contract forbids.
+            g.update({"male": 0.0, "female": 0.0, "unknown": 1.0})
+            warn.append(f"{meta['id']}: gender claim without evidence -> unknown")
+        else:
+            total = male + female + float(g.get("unknown") or 0)
+            if total and abs(total - 1.0) > 0.02:
+                g["male"], g["female"] = round(male / total, 3), round(female / total, 3)
+                g["unknown"] = round(1.0 - g["male"] - g["female"], 3)
+                warn.append(f"{meta['id']}: gender probabilities rescaled from {total:.2f}")
+    return warn
+
+
+def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[str]]:
     n = 0
+    warnings: list[str] = []
+    missing: list[str] = []
     for rec in records:
         meta = manifest_by_id.get(rec.get("id"))
         if not meta:
+            missing.append(str(rec.get("id")))
             continue
         p = rec.get("profile") or {}
+        warnings.extend(_reconcile(p, meta))
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO author_profile
@@ -309,7 +431,11 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> int:
                 db._jsonb(p.get("topics")), p.get("notes"), rec.get("model"),
             ))
         n += 1
-    return n
+    if missing:
+        warnings.append(f"{len(missing)} profile(s) had no manifest entry and were "
+                        f"skipped: {', '.join(missing[:5])}"
+                        + (" …" if len(missing) > 5 else ""))
+    return n, warnings
 
 
 def main(argv=None) -> int:
@@ -335,7 +461,12 @@ def main(argv=None) -> int:
         man = {m["id"]: m for m in json.load(open(f"{OUT_DIR}/manifest.json"))}
         data = json.load(open(args.records, encoding="utf-8"))
         recs = data if isinstance(data, list) else [data]
-        print("profiles ingested:", ingest(conn, recs, man))
+        count, warns = ingest(conn, recs, man)
+        print("profiles ingested:", count)
+        for w in warns:
+            print("  fixed:", w)
+        if not warns:
+            print("  no corrections needed")
     else:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*), count(*) FILTER (WHERE subject_kind='persona') FROM author_profile")
