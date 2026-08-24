@@ -38,6 +38,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -80,14 +81,43 @@ def _try_formats(s: str) -> datetime | None:
     return None
 
 
-def _article_identity(slug: str, parsed: dict, source_file: str) -> tuple[str, str]:
-    """Return (article_id, canonical_url). Prefer a real URL (so archive merges
-    with live); otherwise a stable pdf:// key derived from the file."""
-    url = (parsed.get("url") or "").strip()
-    if url:
-        return ids.article_id(slug, url), ids.canonical_url(url)
+# TX Group urls carry the article's native numeric id, both in article urls
+# (/story/<slug>-<id>) and in comment-page urls (/comment/<id>). That id is the
+# reliable join key to an already-crawled live article.
+_NATIVE_ID_RE = re.compile(r"/(?:comment|story)/(?:.*?-)?(\d{6,})(?:\D|$)")
+
+
+def native_article_id(url: str | None) -> str | None:
+    if not url:
+        return None
+    m = _NATIVE_ID_RE.search(url)
+    return m.group(1) if m else None
+
+
+def _article_identity(conn, slug: str, parsed: dict,
+                      source_file: str) -> tuple[str, str, str | None, bool]:
+    """Return (article_id, canonical_url, source_key, merged_with_live).
+
+    Merge order:
+      1. the article's native numeric id already present in the DB (live crawl) —
+         reuse that row so archive and live history join;
+      2. a complete article url printed on the capture;
+      3. a stable pdf:// key derived from the filename (URL lost / page gone).
+    """
+    url = (parsed.get("url") or "").strip() or None
+    native = native_article_id(url)
+
+    if native and conn is not None:
+        hit = db.find_article_by_source_key(conn, ids.journal_id(slug), native)
+        if hit:
+            log.info("merging %s into live article %s", os.path.basename(source_file), native)
+            return hit[0], hit[1], native, True
+
+    if url and "/story/" in url:
+        return ids.article_id(slug, url), ids.canonical_url(url), native, False
+
     key = f"pdf://{slug}/{os.path.basename(source_file)}"
-    return ids._sha(f"article:{slug}:{key}"), key
+    return ids._sha(f"article:{slug}:{key}"), key, native, False
 
 
 def ingest_record(conn, record: dict, stats: dict) -> None:
@@ -97,15 +127,19 @@ def ingest_record(conn, record: dict, stats: dict) -> None:
     base = os.path.basename(source_file)
 
     jid = ids.journal_id(slug)
-    aid, canon = _article_identity(slug, parsed, source_file)
+    aid, canon, native, merged = _article_identity(conn, slug, parsed, source_file)
+    if merged:
+        stats["merged_with_live"] = stats.get("merged_with_live", 0) + 1
 
     chash = ids.content_hash(parsed.get("headline") or "", parsed.get("subhead") or "",
                              parsed.get("body_text") or "", parsed.get("author") or "")
     raw_meta = {"ingested_by": "pdf-llm", "source_file": base,
-                "archive_url": parsed.get("url")}
+                "archive_url": parsed.get("url"), "note": parsed.get("note")}
 
+    # An archived capture must never downgrade a live article's origin.
+    origin = "live" if merged else "pdf"
     db.upsert_article(conn, aid=aid, journal_id=jid, canonical_url=canon,
-                      source_key=parsed.get("url") or None, origin="pdf", source_file=base)
+                      source_key=native, origin=origin, source_file=base)
     snap_id = db.insert_article_snapshot(conn, article_id=aid, content_hash=chash, fields={
         "published_at": parse_dt(parsed.get("published_at")),
         "updated_at": None,

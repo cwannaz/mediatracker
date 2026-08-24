@@ -431,6 +431,17 @@ def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def find_article_by_source_key(conn, journal_id: str, source_key: str) -> tuple[str, str] | None:
+    """Return (article_id, canonical_url) for a journal's native article id.
+    Used to merge an archived capture with the already-crawled live article."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, canonical_url FROM article WHERE journal_id=%s AND source_key=%s LIMIT 1",
+            (journal_id, source_key),
+        )
+        return cur.fetchone()
+
+
 def mark_article_gone(conn, aid: str) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -470,6 +481,162 @@ def finish_scan_run(conn, run_id: int, *, status: str, stats: dict, note: str | 
              stats.get("comments_seen", 0), stats.get("comment_snapshots", 0),
              stats.get("images_new", 0), stats.get("errors", 0), note, run_id),
         )
+
+
+# --------------------------------------------------------------------------- #
+# Browsing / read queries (Article Browser: articles, commenters, authors, sources)
+# --------------------------------------------------------------------------- #
+
+def _rows(cur) -> list[dict]:
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
+                    limit: int = 100, offset: int = 0) -> list[dict]:
+    """Latest snapshot per article, newest first."""
+    sql = """
+        SELECT DISTINCT ON (a.id)
+               a.id, a.canonical_url, a.origin, a.source_file, j.slug AS journal,
+               s.headline, s.subhead, s.author, s.source, s.section,
+               s.published_at, s.comment_count, s.id AS snapshot_id
+        FROM article a
+        JOIN journal j ON j.id = a.journal_id
+        LEFT JOIN article_snapshot s ON s.article_id = a.id
+        WHERE (%(q)s IS NULL OR s.headline ILIKE '%%' || %(q)s || '%%')
+          AND (%(journal)s IS NULL OR j.slug = %(journal)s)
+        ORDER BY a.id, s.fetched_at DESC
+    """
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM ({sql}) t ORDER BY published_at DESC NULLS LAST "
+                    f"LIMIT %(limit)s OFFSET %(offset)s",
+                    {"q": q, "journal": journal, "limit": limit, "offset": offset})
+        return _rows(cur)
+
+
+def get_article(conn, article_id: str, snapshot_id: int | None = None) -> dict | None:
+    """One article with its chosen (default latest) snapshot, images and comments."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT s.*, a.canonical_url, a.origin, a.source_file, j.slug AS journal, j.name AS journal_name
+            FROM article_snapshot s
+            JOIN article a ON a.id = s.article_id
+            JOIN journal j ON j.id = a.journal_id
+            WHERE s.article_id = %s AND (%s::bigint IS NULL OR s.id = %s)
+            ORDER BY s.fetched_at DESC LIMIT 1
+        """, (article_id, snapshot_id, snapshot_id))
+        rows = _rows(cur)
+        if not rows:
+            return None
+        art = rows[0]
+        cur.execute("""
+            SELECT ai.sha256, ai.role, ai.position, ai.alt_text, ai.caption,
+                   i.mime, i.width, i.height, i.storage_path
+            FROM article_image ai JOIN image i ON i.sha256 = ai.sha256
+            WHERE ai.snapshot_id = %s ORDER BY ai.position
+        """, (art["id"],))
+        art["images"] = _rows(cur)
+        cur.execute("""
+            SELECT DISTINCT ON (c.id)
+                   c.id, c.author_nick, c.parent_id, cs.posted_at, cs.body_text,
+                   cs.like_count, cs.reply_count, cs.raw_meta
+            FROM comment c JOIN comment_snapshot cs ON cs.comment_id = c.id
+            WHERE c.article_id = %s
+            ORDER BY c.id, cs.fetched_at DESC
+        """, (article_id,))
+        art["comments"] = sorted(_rows(cur), key=lambda c: (c["posted_at"] is None, c["posted_at"]))
+        return art
+
+
+def browse_commenters(conn, *, q: str | None = None, limit: int = 200,
+                      offset: int = 0) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT c.author_nick AS nick,
+                   count(DISTINCT c.id) AS comments,
+                   count(DISTINCT c.article_id) AS articles,
+                   min(cs.posted_at) AS first_seen,
+                   max(cs.posted_at) AS last_seen,
+                   count(DISTINCT j.slug) AS journals,
+                   sum(cs.like_count) AS total_votes
+            FROM comment c
+            JOIN comment_snapshot cs ON cs.comment_id = c.id
+            JOIN article a ON a.id = c.article_id
+            JOIN journal j ON j.id = a.journal_id
+            WHERE c.author_nick IS NOT NULL
+              AND (%(q)s IS NULL OR c.author_nick ILIKE '%%' || %(q)s || '%%')
+            GROUP BY c.author_nick
+            ORDER BY comments DESC
+            LIMIT %(limit)s OFFSET %(offset)s
+        """, {"q": q, "limit": limit, "offset": offset})
+        return _rows(cur)
+
+
+def get_commenter(conn, nick: str, limit: int = 500) -> dict:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT ON (c.id)
+                   c.id, c.article_id, cs.posted_at, cs.body_text, cs.like_count,
+                   s.headline, j.slug AS journal, a.origin
+            FROM comment c
+            JOIN comment_snapshot cs ON cs.comment_id = c.id
+            JOIN article a ON a.id = c.article_id
+            JOIN journal j ON j.id = a.journal_id
+            LEFT JOIN LATERAL (
+                SELECT headline FROM article_snapshot
+                WHERE article_id = a.id ORDER BY fetched_at DESC LIMIT 1
+            ) s ON true
+            WHERE c.author_nick = %s
+            ORDER BY c.id, cs.fetched_at DESC
+        """, (nick,))
+        comments = sorted(_rows(cur), key=lambda c: (c["posted_at"] is None, c["posted_at"]))
+        return {"nick": nick, "comments": comments[:limit], "total": len(comments)}
+
+
+def browse_authors(conn, *, limit: int = 200) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT s.author, count(DISTINCT s.article_id) AS articles,
+                   min(s.published_at) AS first_seen, max(s.published_at) AS last_seen,
+                   count(DISTINCT j.slug) AS journals
+            FROM article_snapshot s
+            JOIN article a ON a.id = s.article_id
+            JOIN journal j ON j.id = a.journal_id
+            WHERE s.author IS NOT NULL AND s.author <> ''
+            GROUP BY s.author ORDER BY articles DESC LIMIT %s
+        """, (limit,))
+        return _rows(cur)
+
+
+def browse_sources(conn, *, limit: int = 200) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT s.source, count(DISTINCT s.article_id) AS articles,
+                   min(s.published_at) AS first_seen, max(s.published_at) AS last_seen
+            FROM article_snapshot s
+            WHERE s.source IS NOT NULL AND s.source <> ''
+            GROUP BY s.source ORDER BY articles DESC LIMIT %s
+        """, (limit,))
+        return _rows(cur)
+
+
+def dataset_stats(conn) -> dict:
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM article"); out["articles"] = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM comment"); out["comments"] = cur.fetchone()[0]
+        cur.execute("SELECT count(DISTINCT author_nick) FROM comment WHERE author_nick IS NOT NULL")
+        out["commenters"] = cur.fetchone()[0]
+        cur.execute("SELECT count(DISTINCT author) FROM article_snapshot WHERE author IS NOT NULL AND author <> ''")
+        out["authors"] = cur.fetchone()[0]
+        cur.execute("SELECT count(DISTINCT source) FROM article_snapshot WHERE source IS NOT NULL AND source <> ''")
+        out["sources"] = cur.fetchone()[0]
+        cur.execute("SELECT origin, count(*) FROM article GROUP BY origin")
+        out["by_origin"] = dict(cur.fetchall())
+        cur.execute("SELECT min(posted_at)::date, max(posted_at)::date FROM comment_snapshot")
+        lo, hi = cur.fetchone()
+        out["comment_span"] = [str(lo) if lo else None, str(hi) if hi else None]
+    return out
 
 
 def list_scan_runs(conn, *, slug: str | None = None, limit: int = 50) -> list[dict]:

@@ -10,5 +10,7 @@ export default defineConfig({
   server: {
     port: 55080,
     strictPort: false,
+    // Archived article images are served by the daemon's blob route (port+1).
+    proxy: { '/blob': { target: 'http://127.0.0.1:55031', changeOrigin: true } },
   },
 })

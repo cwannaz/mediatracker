@@ -16,7 +16,7 @@ import logging
 
 import websockets
 
-from . import db, ids, sources
+from . import blobserver, db, ids, sources
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -58,6 +58,9 @@ class Server:
         self.engine = ScanEngine(cfg=self.cfg, conn=self.conn, blobs=self.blobs,
                                  store=self.store, fetcher=self.fetcher, health=self.health)
         await self.engine.start()
+
+        if self.conn is not None:
+            blobserver.start(self.cfg, self._blob_lookup)
 
         async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
@@ -130,6 +133,14 @@ class Server:
                              queued=self.engine.queue.qsize() if self.engine else 0,
                              last_stats=self.engine.last_stats if self.engine else {}))
 
+        elif cmd in ("dataset_stats", "browse_articles", "get_article",
+                     "browse_commenters", "get_commenter", "browse_authors",
+                     "browse_sources"):
+            if self.conn is None:
+                await ws.send(error(cmd, "degraded: Postgres unavailable"))
+                return
+            await ws.send(self._browse(cmd, msg))
+
         elif cmd == "scan_history":
             if self.conn is None:
                 await ws.send(ok("scan_history", runs=[], degraded=True))
@@ -162,6 +173,40 @@ class Server:
                 "last": (self.engine.last_stats.get(slug) if self.engine else None),
             })
         return out
+
+    def _blob_lookup(self, sha256: str):
+        """(storage_path, mime) for a blob, or None. Used by the blob HTTP route.
+        Runs on the blob server's thread, so it uses its own short-lived cursor."""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT storage_path, mime FROM image WHERE sha256 = %s", (sha256,))
+                return cur.fetchone()
+        except Exception as exc:
+            log.warning("blob lookup failed for %s: %s", sha256, exc)
+            return None
+
+    def _browse(self, cmd: str, msg: dict) -> str:
+        """Read-only queries backing the Article Browser subtabs."""
+        limit = min(int(msg.get("limit", 100)), 1000)
+        offset = int(msg.get("offset", 0))
+        q = msg.get("q") or None
+        if cmd == "dataset_stats":
+            return ok(cmd, **db.dataset_stats(self.conn))
+        if cmd == "browse_articles":
+            return ok(cmd, articles=db.browse_articles(
+                self.conn, q=q, journal=msg.get("journal") or None,
+                limit=limit, offset=offset))
+        if cmd == "get_article":
+            art = db.get_article(self.conn, msg["article_id"], msg.get("snapshot_id"))
+            return ok(cmd, article=art) if art else error(cmd, "article not found")
+        if cmd == "browse_commenters":
+            return ok(cmd, commenters=db.browse_commenters(
+                self.conn, q=q, limit=limit, offset=offset))
+        if cmd == "get_commenter":
+            return ok(cmd, **db.get_commenter(self.conn, msg["nick"], limit=limit))
+        if cmd == "browse_authors":
+            return ok(cmd, authors=db.browse_authors(self.conn, limit=limit))
+        return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
 
     def _update_source(self, msg: dict) -> str:
         slug = msg.get("journal")

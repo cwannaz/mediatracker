@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useDaemon } from './useDaemon.js'
 import DataSources from './DataSources.jsx'
 import DeveloperLogos from './DeveloperLogos.jsx'
+import Browser from './Browser.jsx'
 import { PulseMark } from './logos.jsx'
 
 const TABS = [
   { id: 'sources', label: 'Data Sources' },
-  { id: 'browser', label: 'Article Browser' },  // built later
+  { id: 'browser', label: 'Browse' },
   { id: 'dev', label: 'Developer' },
 ]
 
@@ -52,11 +53,7 @@ export default function App() {
       </header>
 
       {tab === 'sources' && <DataSources connected={connected} send={send} />}
-      {tab === 'browser' && (
-        <div className="placeholder">
-          The article &amp; comment browser will live here — coming next.
-        </div>
-      )}
+      {tab === 'browser' && <Browser connected={connected} send={send} />}
       {tab === 'dev' && <DeveloperLogos />}
     </>
   )
