@@ -273,3 +273,65 @@ table.sortable th[aria-sort="none"] .arrow { color: transparent; }
 .canton.empty { background: var(--bg); }
 .canton .nm { font-size: 10.5px; color: var(--muted); }
 .canton .ct { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- Findings ------------------------------------------------------- */
+/* The written record. Prose is meant to be read at length here, so the body
+   text is wider-spaced and narrower than the dense tables elsewhere. */
+.findings .finding { padding-top: 14px; }
+.findings .finding header { margin-bottom: 10px; }
+.findings .finding h3 { font-size: 14.5px; font-weight: 600; margin: 0;
+  line-height: 1.4; max-width: 62ch; }
+.findings .recorded { font-size: 11px; white-space: nowrap; }
+
+.finding-body { font-size: 13.5px; line-height: 1.65; max-width: 74ch;
+  margin: 0 0 10px; color: var(--text); }
+
+/* How a finding is known. Colour carries the same distinction the schema
+   makes between measurement and inference, so it has to be legible at a
+   glance and must not read as a severity. */
+.status { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap; font-weight: 600;
+  border: 1px solid transparent; }
+.status.measured { background: rgba(90,190,140,.14); color: #5abe8c; border-color: rgba(90,190,140,.3); }
+.status.inferred { background: rgba(255,192,0,.13); color: var(--brand-gold); border-color: rgba(255,192,0,.3); }
+.status.observed { background: rgba(120,140,255,.14); color: #8c9cff; border-color: rgba(120,140,255,.3); }
+.status.open     { background: rgba(216,151,60,.15); color: var(--warn); border-color: rgba(216,151,60,.32); }
+
+.findings .legend .subtle { font-size: 11.5px; }
+
+table.compare td:first-child { color: var(--muted); }
+table.compare .pct { margin-left: 6px; font-size: 11px; }
+
+.findings .metric.hi { border-color: rgba(255,192,0,.35); background: rgba(255,192,0,.06); }
+
+.findings .listtitle { margin: 12px 0 6px; font-size: 12px; }
+.findlist { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.9; }
+.findlist li strong { font-weight: 600; }
+
+/* Verbatim evidence. Quotes are the load-bearing part of an observed finding,
+   so they are set apart rather than folded into the prose. */
+.evidence { margin-top: 12px; display: grid; gap: 10px; }
+.evidence blockquote { margin: 0; padding: 9px 14px; border-left: 2px solid var(--brand-gold);
+  background: var(--bg); border-radius: 0 6px 6px 0; }
+.evidence blockquote p { margin: 0; font-size: 13px; line-height: 1.55; font-style: italic; }
+.evidence cite { display: block; margin-top: 5px; font-size: 11.5px; color: var(--muted); font-style: normal; }
+
+.caveat { margin: 12px 0 0; padding: 9px 12px; font-size: 12.5px; line-height: 1.55;
+  background: rgba(216,151,60,.08); border: 1px solid rgba(216,151,60,.22);
+  border-radius: 6px; color: var(--text); max-width: 78ch; }
+
+/* Findings figures carry sentences, not just counts, so the tiles need room
+   to wrap — but they must not stretch to half the window when there are only
+   two of them, which is what the default auto-fit 1fr does. */
+.findings .metrics { grid-template-columns: repeat(auto-fit, minmax(230px, 360px));
+  justify-content: start; margin-top: 4px; }
+.findings .metric .v { font-size: 16px; line-height: 1.4; white-space: normal; }
+.findings .metric .k { margin-top: 4px; line-height: 1.35; }
+
+/* Comparison tables are two or three narrow columns of numbers; letting them
+   fill the card width pushes the figures a screen apart from their labels. */
+.findings table.compare { width: auto; min-width: 340px; max-width: 640px; }
+.findings table.compare td:first-child, .findings table.compare th:first-child { min-width: 170px; }
+.findings .table-wrap { margin-top: 6px; }
+/* Quotes are read, not scanned — full window width makes them hard to track. */
+.evidence blockquote { max-width: 90ch; }

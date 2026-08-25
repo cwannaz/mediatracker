@@ -535,6 +535,12 @@ class TxAstroSource(Source):
     _comment_max = 5000       # safety cap on comments fetched per article
     _comment_max_pages = 60
 
+    @property
+    def comments_supported(self) -> bool:
+        # The Astro comment endpoints need no per-title configuration; if the
+        # adapter runs at all, comments are collectable.
+        return True
+
     def _api(self, path: str) -> str:
         return f"{self.base_url}/api/content/{path}"
 

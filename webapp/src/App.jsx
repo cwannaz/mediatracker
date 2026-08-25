@@ -3,11 +3,13 @@ import { useDaemon } from './useDaemon.js'
 import DataSources from './DataSources.jsx'
 import DeveloperLogos from './DeveloperLogos.jsx'
 import Browser from './Browser.jsx'
+import Findings from './Findings.jsx'
 import { PulseMark } from './logos.jsx'
 
 const TABS = [
   { id: 'sources', label: 'Data Sources' },
   { id: 'browser', label: 'Browse' },
+  { id: 'findings', label: 'Findings' },
   { id: 'dev', label: 'Developer' },
 ]
 
@@ -54,6 +56,7 @@ export default function App() {
 
       {tab === 'sources' && <DataSources connected={connected} send={send} />}
       {tab === 'browser' && <Browser connected={connected} send={send} />}
+      {tab === 'findings' && <Findings connected={connected} send={send} />}
       {tab === 'dev' && <DeveloperLogos />}
     </>
   )

@@ -86,6 +86,17 @@ class Source:
     def community_key(self) -> str:
         return self.community or self.slug
 
+    @property
+    def comments_supported(self) -> bool:
+        """Whether this adapter can actually collect comments today.
+
+        The GUI shows a warning when it cannot, so this has to describe the
+        adapter rather than any one platform's configuration: it used to be
+        read off a Next.js tenant id, which meant every source on a different
+        platform was reported as broken however well it worked.
+        """
+        return False
+
     async def discover(self, fetcher) -> list[str]:
         """Return candidate article URLs to (re-)check this cycle — typically
         from the homepage, section fronts, RSS feeds or a sitemap."""

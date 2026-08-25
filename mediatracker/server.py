@@ -139,7 +139,8 @@ class Server:
                      "browse_sources", "list_personas", "get_persona",
                      "create_persona", "add_alias", "remove_alias",
                      "delete_persona", "link_nicks", "alias_candidates",
-                     "get_profile", "profile_overview"):
+                     "get_profile", "profile_overview",
+                     "findings_overview"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -174,7 +175,7 @@ class Server:
                 "name": cls.name,
                 "base_url": inst.base_url,
                 "comment_system": cls.comment_system,
-                "comments_supported": getattr(cls, "comment_tenant_id", None) is not None,
+                "comments_supported": inst.comments_supported,
                 "schedule": sched,
                 "next_scan_at": self.engine.next_theoretical(slug) if self.engine else None,
                 "last": (self.engine.last_stats.get(slug) if self.engine else None),
@@ -215,6 +216,8 @@ class Server:
             return ok(cmd, authors=db.browse_authors(self.conn, limit=limit))
         if cmd == "browse_sources":
             return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
+        if cmd == "findings_overview":
+            return ok(cmd, **db.findings_overview(self.conn))
         if cmd == "profile_overview":
             return ok(cmd, **db.profile_overview(self.conn, community=msg.get("community")))
         if cmd == "get_profile":

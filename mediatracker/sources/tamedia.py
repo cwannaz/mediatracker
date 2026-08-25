@@ -298,6 +298,10 @@ class TamediaSource(Source):
     comment_page_limit = 100
     _comment_max = 5000  # safety cap on comments fetched per article
 
+    @property
+    def comments_supported(self) -> bool:
+        return self.comment_tenant_id is not None
+
     def _comment_api(self) -> str:
         host = urlsplit(self.base_url).netloc.replace("www.", "", 1)
         return f"https://api.{host}/comment/v1/comments"

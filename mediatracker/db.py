@@ -1081,6 +1081,110 @@ def dataset_stats(conn) -> dict:
     return out
 
 
+def findings_overview(conn) -> dict:
+    """Every live figure the Findings tab quotes, in one round trip.
+
+    Findings are written prose, but any number inside one is recomputed here
+    rather than typed into the text: a finding that hard-codes a count becomes
+    quietly false the next time the scanner runs, and a study that cannot trust
+    its own write-up is worse than one with no write-up.
+    """
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.community, count(DISTINCT a.id) AS articles,
+                   count(cm.id) AS comments,
+                   count(DISTINCT cm.author_nick) AS nicks
+            FROM journal j
+            LEFT JOIN article a ON a.journal_id = j.id
+            LEFT JOIN comment cm ON cm.article_id = a.id
+            GROUP BY 1 ORDER BY 1
+        """)
+        out["corpus"] = _rows(cur)
+
+        cur.execute("""
+            SELECT j.slug, j.community, count(DISTINCT a.id) AS articles,
+                   count(cm.id) AS comments
+            FROM journal j
+            LEFT JOIN article a ON a.journal_id = j.id
+            LEFT JOIN comment cm ON cm.article_id = a.id
+            GROUP BY 1,2 ORDER BY 1
+        """)
+        out["titles"] = _rows(cur)
+
+        # Distributions, per community, per SUBJECT — never per comment. One
+        # heavy commenter would otherwise dominate every share on the page.
+        for key, expr, where in (
+            ("mastery",  "language->>'mastery'",  "language ? 'mastery'"),
+            ("politics", "politics->>'overall'",  "politics ? 'overall'"),
+            ("region",   "region->>'guess'",      "region ? 'guess'"),
+            ("drift",    "politics->>'drift'",    "politics ? 'drift'"),
+            ("register", "language->>'register'", "language ? 'register'"),
+            ("accents",  "language->>'accent_usage'", "language ? 'accent_usage'"),
+        ):
+            cur.execute(f"""SELECT community, {expr} AS v, count(*) AS n
+                            FROM author_profile WHERE {where}
+                            GROUP BY 1,2 ORDER BY 3 DESC""")
+            out[key] = _rows(cur)
+
+        cur.execute("""
+            SELECT community,
+                   CASE WHEN (gender->>'male')::float   >= 0.6 THEN 'male'
+                        WHEN (gender->>'female')::float >= 0.6 THEN 'female'
+                        ELSE 'unknown' END AS v,
+                   count(*) AS n
+            FROM author_profile WHERE gender ? 'male' GROUP BY 1,2
+        """)
+        out["gender"] = _rows(cur)
+
+        cur.execute("""
+            SELECT community, count(*) AS n,
+                   round(avg((language->>'error_rate_per_100_words')::float)::numeric, 2) AS mean_err,
+                   round(avg((metrics->>'avg_words_per_comment')::float)::numeric, 1) AS mean_words,
+                   sum(n_comments) AS comments, sum(n_chars) AS chars
+            FROM author_profile GROUP BY 1 ORDER BY 1
+        """)
+        out["profiles"] = _rows(cur)
+
+        # Corpus concentration: the share held by the single heaviest subject.
+        cur.execute("""
+            SELECT community, label, n_comments,
+                   round(100.0 * n_comments / sum(n_comments) OVER (PARTITION BY community), 1) AS pct
+            FROM author_profile
+            ORDER BY community, n_comments DESC
+        """)
+        rows = _rows(cur)
+        seen, top = set(), []
+        for r in rows:
+            if r["community"] not in seen:
+                seen.add(r["community"]); top.append(r)
+        out["heaviest"] = top
+
+        # Nicknames present in more than one community. Kept as separate
+        # subjects on purpose; this is the list that makes that testable.
+        cur.execute("""
+            WITH per_community AS (
+                SELECT cm.author_nick AS nick, j.community, count(*) AS n
+                FROM comment cm
+                JOIN article a ON a.id = cm.article_id
+                JOIN journal j ON j.id = a.journal_id
+                WHERE cm.author_nick IS NOT NULL
+                GROUP BY 1, 2
+            )
+            SELECT nick,
+                   count(*) AS communities,
+                   sum(n) AS total,
+                   json_agg(json_build_object('community', community, 'n', n)
+                            ORDER BY n DESC) AS split
+            FROM per_community
+            GROUP BY nick
+            HAVING count(*) > 1
+            ORDER BY sum(n) DESC, nick
+        """)
+        out["cross_community"] = _rows(cur)
+    return out
+
+
 def list_scan_runs(conn, *, slug: str | None = None, limit: int = 50) -> list[dict]:
     with conn.cursor() as cur:
         if slug:
