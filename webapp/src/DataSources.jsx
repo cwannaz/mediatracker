@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import SourcePanel from './SourcePanel.jsx'
 
-export default function DataSources({ connected, send }) {
+export default function DataSources({ connected, send, route, navigate }) {
   const [sources, setSources] = useState([])
-  const [selected, setSelected] = useState(null)
+  const selected = route[0] || null
   const [status, setStatus] = useState({ current: null, queued: 0, last_stats: {} })
   const [degraded, setDegraded] = useState(false)
   const [bump, setBump] = useState(0)   // bumped when a scan completes -> reload history
@@ -12,10 +12,7 @@ export default function DataSources({ connected, send }) {
   const loadSources = useCallback(async () => {
     try {
       const r = await send('list_sources')
-      if (r.ok) {
-        setSources(r.sources)
-        setSelected((s) => s ?? r.sources[0]?.slug ?? null)
-      }
+      if (r.ok) setSources(r.sources)
       const st = await send('status')
       if (st.ok) setDegraded(st.degraded)
     } catch { /* not connected */ }
@@ -23,6 +20,15 @@ export default function DataSources({ connected, send }) {
 
   // Initial + on-connect load.
   useEffect(() => { if (connected) loadSources() }, [connected, loadSources])
+
+  // Land on the first source when the route names none — or names one that no
+  // longer exists. Replaced rather than pushed: the default is where Back
+  // should arrive, not a step of its own.
+  useEffect(() => {
+    if (sources.length && !sources.some((s) => s.slug === selected)) {
+      navigate([sources[0].slug], { replace: true })
+    }
+  }, [sources, selected, navigate])
 
   // Poll scan progress; detect scan completion to refresh sources + history.
   useEffect(() => {
@@ -65,7 +71,7 @@ export default function DataSources({ connected, send }) {
               className="tabrail-item"
               role="tab"
               aria-selected={selected === s.slug}
-              onClick={() => setSelected(s.slug)}
+              onClick={() => navigate([s.slug])}
             >
               {s.name}
               <span className="sub">

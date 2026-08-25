@@ -18,10 +18,12 @@ const STATUS = {
   open: { label: 'open question', hint: 'Stated as a question. Nothing tests it yet.' },
 }
 
-export default function Findings({ connected, send }) {
+export default function Findings({ connected, send, route, navigate }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
-  const [active, setActive] = useState(SECTIONS[0].id)
+  // The open section is part of the URL, so a section can be linked to and Back
+  // steps between sections rather than out of the app.
+  const active = SECTIONS.some((s) => s.id === route[0]) ? route[0] : SECTIONS[0].id
 
   useEffect(() => {
     if (!connected) return
@@ -49,7 +51,7 @@ export default function Findings({ connected, send }) {
       <nav className="subtabs" role="tablist" aria-label="Findings sections">
         {SECTIONS.map((s) => (
           <button key={s.id} className="subtab" role="tab" aria-selected={active === s.id}
-            onClick={() => setActive(s.id)}>
+            onClick={() => navigate([s.id])}>
             {s.title}
             <span className="count">{counts[s.id]}</span>
           </button>

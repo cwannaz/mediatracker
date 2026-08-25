@@ -6,6 +6,7 @@ import Aggregation from './Aggregation.jsx'
 import Population from './Population.jsx'
 
 const SUBTABS = [
+  { id: 'today', label: 'Today', statKey: 'today' },
   { id: 'articles', label: 'Articles', statKey: 'articles' },
   { id: 'commenters', label: 'Commenters', statKey: 'commenters' },
   { id: 'people', label: 'People', statKey: 'personas' },
@@ -20,21 +21,48 @@ const fmtDate = (v) => {
   try { return new Date(v).toLocaleDateString() } catch { return String(v).slice(0, 10) }
 }
 
-export default function Browser({ connected, send }) {
-  const [tab, setTab] = useState('articles')
+// The papers' own timezone. The daemon selects "today" on a Zurich calendar
+// day, so the list must be labelled and timed in that zone too — a reader in
+// another one would otherwise see hours that contradict the heading.
+const PAPER_TZ = 'Europe/Zurich'
+
+// Within a single day the date is the same on every row, so the hour is the
+// only part that tells the reader anything.
+const fmtTime = (v) => {
+  if (!v) return '—'
+  try {
+    return new Date(v).toLocaleTimeString(undefined,
+      { timeZone: PAPER_TZ, hour: '2-digit', minute: '2-digit' })
+  } catch { return '—' }
+}
+
+const paperDay = () => {
+  try {
+    return new Date().toLocaleDateString(undefined,
+      { timeZone: PAPER_TZ, weekday: 'long', day: 'numeric', month: 'long' })
+  } catch { return 'today' }
+}
+
+export default function Browser({ connected, send, route, navigate, back }) {
   const [stats, setStats] = useState(null)
-  // Selected entity opens a detail view; null shows the list.
-  const [openArticle, setOpenArticle] = useState(null)
-  const [openNick, setOpenNick] = useState(null)
-  const [openPersona, setOpenPersona] = useState(null)
+
+  // The subtab and the open entity both come from the URL, so opening an
+  // article and pressing Back returns to the list it was opened from.
+  const tab = SUBTABS.some((t) => t.id === route[0]) ? route[0] : SUBTABS[0].id
+  const open = route[1] || null
 
   useEffect(() => {
     if (!connected) return
     send('dataset_stats').then((r) => { if (r.ok) setStats(r) }).catch(() => {})
   }, [connected, send])
 
-  const showNick = useCallback((nick) => { setTab('commenters'); setOpenNick(nick) }, [])
-  const showPersona = useCallback((id) => { setTab('people'); setOpenPersona(id) }, [])
+  const showNick = useCallback((nick) => navigate(['commenters', nick]), [navigate])
+  const showPersona = useCallback((id) => navigate(['people', id]), [navigate])
+  const showArticle = useCallback((id) => navigate(['articles', id]), [navigate])
+  const openHere = useCallback((id) => navigate([tab, id]), [navigate, tab])
+  // Closing a detail view walks the history back, so the app's Back button and
+  // the browser's do the same thing.
+  const close = useCallback(() => back([tab]), [back, tab])
 
   return (
     <>
@@ -42,7 +70,7 @@ export default function Browser({ connected, send }) {
         {SUBTABS.map((t) => (
           <button key={t.id} className="subtab" role="tab"
             aria-selected={tab === t.id}
-            onClick={() => { setTab(t.id); setOpenArticle(null); setOpenNick(null); setOpenPersona(null) }}>
+            onClick={() => navigate([t.id])}>
             {t.label}
             {stats?.[t.statKey] != null && <span className="count">{stats[t.statKey]}</span>}
           </button>
@@ -52,27 +80,26 @@ export default function Browser({ connected, send }) {
       <div className="browser">
         {!connected && <div className="empty">Daemon offline.</div>}
 
-        {connected && tab === 'articles' && (
-          openArticle
-            ? <ArticleView articleId={openArticle} send={send}
-                onBack={() => setOpenArticle(null)} onNick={showNick} />
-            : <ArticleList send={send} onOpen={setOpenArticle} />
+        {connected && (tab === 'today' || tab === 'articles') && (
+          open
+            ? <ArticleView articleId={open} send={send}
+                onBack={close} onNick={showNick} />
+            : <ArticleList send={send} onOpen={openHere}
+                day={tab === 'today' ? 'today' : null} />
         )}
 
         {connected && tab === 'commenters' && (
-          openNick
-            ? <CommenterView nick={openNick} send={send}
-                onBack={() => setOpenNick(null)} onPersona={showPersona}
-                onArticle={(id) => { setTab('articles'); setOpenArticle(id) }} />
-            : <CommenterList send={send} onOpen={setOpenNick} />
+          open
+            ? <CommenterView nick={open} send={send}
+                onBack={close} onPersona={showPersona} onArticle={showArticle} />
+            : <CommenterList send={send} onOpen={openHere} />
         )}
 
         {connected && tab === 'people' && (
-          openPersona
-            ? <PersonaView personaId={openPersona} send={send}
-                onBack={() => setOpenPersona(null)} onNick={showNick}
-                onArticle={(id) => { setTab('articles'); setOpenArticle(id) }} />
-            : <PersonaList send={send} onOpen={setOpenPersona} />
+          open
+            ? <PersonaView personaId={open} send={send}
+                onBack={close} onNick={showNick} onArticle={showArticle} />
+            : <PersonaList send={send} onOpen={openHere} />
         )}
 
         {connected && tab === 'aggregation' && <Aggregation send={send} onPersona={showPersona} />}
@@ -103,10 +130,17 @@ function useQuery(send, cmd, key, params = {}) {
   return [rows, err]
 }
 
-function ArticleList({ send, onOpen }) {
+// `day` restricts the list to one publication date, resolved on the daemon in
+// the papers' own timezone. The Today subtab passes 'today'; the Articles
+// subtab passes nothing and lists the whole corpus.
+function ArticleList({ send, onOpen, day = null }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
-  const [rows, err] = useQuery(send, 'browse_articles', 'articles', { q: term || null, limit: 300 })
+  const [rows, err] = useQuery(send, 'browse_articles', 'articles',
+    { q: term || null, day, limit: 300 })
+  const empty = day
+    ? 'Nothing published today yet — or today’s scan has not run.'
+    : 'No articles.'
   return (
     <>
       <div className="toolbar">
@@ -114,18 +148,19 @@ function ArticleList({ send, onOpen }) {
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && setTerm(q)} />
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
+        {day && <span className="subtle">Published {paperDay()}, Swiss time</span>}
       </div>
       {err && <div className="banner warn">{err}</div>}
-      {!rows ? <div className="empty">Loading…</div> : rows.length === 0 ? <div className="empty">No articles.</div> : (
+      {!rows ? <div className="empty">Loading…</div> : rows.length === 0 ? <div className="empty">{empty}</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>Published</th><th>Headline</th><th>Journal</th><th>Section</th>
+            <th>{day ? 'Time' : 'Published'}</th><th>Headline</th><th>Journal</th><th>Section</th>
             <th>Author</th><th>Source</th><th className="num">Comments</th>
           </tr></thead>
           <tbody>
             {rows.map((a) => (
               <tr key={a.id} className="rowlink" onClick={() => onOpen(a.id)}>
-                <td>{fmtDate(a.published_at)}</td>
+                <td>{day ? fmtTime(a.published_at) : fmtDate(a.published_at)}</td>
                 <td style={{ whiteSpace: 'normal', maxWidth: 460 }}>
                   {a.headline || '(untitled)'}
                   {a.origin === 'pdf' && <span className="chip pdf">archive</span>}

@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 try:  # graceful import: the daemon still boots (JSONL-only) without psycopg
     import psycopg
@@ -32,6 +34,15 @@ except Exception:  # pragma: no cover - exercised only where psycopg is absent
     Jsonb = None  # type: ignore
 
 log = logging.getLogger(__name__)
+
+# The papers' own day. A Swiss title's "today" is a calendar day in Zurich, not
+# in UTC and not on whatever clock the daemon happens to run on, so every
+# day-boundary comparison converts to this zone before truncating to a date.
+PAPER_TZ = "Europe/Zurich"
+
+
+def paper_today(tz: str = PAPER_TZ) -> date:
+    return datetime.now(ZoneInfo(tz)).date()
 
 # Search path for the secret file, first match wins. Mirrors algotrade's habit of
 # keeping secrets under the user's private dirs, never in the repo.
@@ -613,8 +624,15 @@ def _guard_regex(exc: Exception) -> None:
 
 
 def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
+                    day: date | str | None = None, tz: str = PAPER_TZ,
                     limit: int = 100, offset: int = 0) -> list[dict]:
-    """Latest snapshot per article, newest first."""
+    """Latest snapshot per article, newest first.
+
+    `day` restricts to one publication date, read in the papers' timezone;
+    pass the string "today" to mean the current one there.
+    """
+    if day == "today":
+        day = paper_today(tz)
     sql = """
         SELECT DISTINCT ON (a.id)
                a.id, a.canonical_url, a.origin, a.source_file, j.slug AS journal,
@@ -636,9 +654,17 @@ def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
     """
     with conn.cursor() as cur:
         try:
-            cur.execute(f"SELECT * FROM ({sql}) t ORDER BY published_at DESC NULLS LAST "
+            # The day is matched outside the DISTINCT ON, against the snapshot
+            # actually shown. Filtering inside would let an article surface on
+            # an older snapshot's date while displaying the newer one's — and
+            # would no longer agree with the count in dataset_stats.
+            cur.execute(f"SELECT * FROM ({sql}) t "
+                        f"WHERE (%(day)s::date IS NULL "
+                        f"       OR (t.published_at AT TIME ZONE %(tz)s)::date = %(day)s::date) "
+                        f"ORDER BY published_at DESC NULLS LAST "
                         f"LIMIT %(limit)s OFFSET %(offset)s",
-                        {"q": q, "journal": journal, "limit": limit, "offset": offset})
+                        {"q": q, "journal": journal, "day": day, "tz": tz,
+                         "limit": limit, "offset": offset})
         except Exception as exc:
             _guard_regex(exc)
         return _rows(cur)
@@ -1071,6 +1097,19 @@ def dataset_stats(conn) -> dict:
         out["authors"] = cur.fetchone()[0]
         cur.execute("SELECT count(DISTINCT source) FROM article_snapshot WHERE source IS NOT NULL AND source <> ''")
         out["sources"] = cur.fetchone()[0]
+        cur.execute("""
+            -- Counted the same way the Today subtab lists them: the article's
+            -- latest snapshot decides the publication date, so a re-scan that
+            -- corrects a timestamp moves the article rather than duplicating it.
+            SELECT count(*) FROM (
+                SELECT DISTINCT ON (a.id) s.published_at
+                FROM article a
+                LEFT JOIN article_snapshot s ON s.article_id = a.id
+                ORDER BY a.id, s.fetched_at DESC
+            ) t
+            WHERE (t.published_at AT TIME ZONE %s)::date = %s
+        """, (PAPER_TZ, paper_today()))
+        out["today"] = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM persona"); out["personas"] = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM author_profile"); out["profiles"] = cur.fetchone()[0]
         cur.execute("SELECT origin, count(*) FROM article GROUP BY origin")

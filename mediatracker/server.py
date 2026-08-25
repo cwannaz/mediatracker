@@ -203,7 +203,7 @@ class Server:
         if cmd == "browse_articles":
             return ok(cmd, articles=db.browse_articles(
                 self.conn, q=q, journal=msg.get("journal") or None,
-                limit=limit, offset=offset))
+                day=msg.get("day") or None, limit=limit, offset=offset))
         if cmd == "get_article":
             art = db.get_article(self.conn, msg["article_id"], msg.get("snapshot_id"))
             return ok(cmd, article=art) if art else error(cmd, "article not found")
