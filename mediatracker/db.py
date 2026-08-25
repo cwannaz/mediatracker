@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -40,6 +40,9 @@ log = logging.getLogger(__name__)
 # day-boundary comparison converts to this zone before truncating to a date.
 PAPER_TZ = "Europe/Zurich"
 
+# How many calendar days the Today view spans — yesterday and today.
+RECENT_DAYS = 2
+
 
 def paper_today(tz: str = PAPER_TZ) -> date:
     return datetime.now(ZoneInfo(tz)).date()
@@ -56,26 +59,17 @@ _LATEST_SNAPSHOT = """
 """
 
 
-def resolve_day(conn, tz: str = PAPER_TZ) -> date | None:
-    """The day the Today view should show.
+def paper_window(days: int = 2, tz: str = PAPER_TZ) -> date:
+    """The first day of a window of `days` ending on the papers' current day.
 
-    Normally the papers' current calendar day. But the Swiss titles publish
-    almost nothing between midnight and the early morning, so for those hours
-    a strict reading of "today" would be a blank page — and the machine
-    running this daemon need not even be in the same day as Zurich. It falls
-    back to the most recent day that has articles; the view says which day it
-    ended up showing.
+    The Today view spans two of them. One is not enough: past midnight in
+    Zurich the calendar day turns over while the Swiss titles publish almost
+    nothing until morning, so a single day is a blank page for several hours
+    every night — and the machine running this daemon need not even be in the
+    same day as Zurich.
     """
-    today = paper_today(tz)
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT count(*) FROM ({_LATEST_SNAPSHOT}) t "
-                    f"WHERE (t.published_at AT TIME ZONE %s)::date = %s", (tz, today))
-        if cur.fetchone()[0]:
-            return today
-        cur.execute(f"SELECT max((t.published_at AT TIME ZONE %s)::date) "
-                    f"FROM ({_LATEST_SNAPSHOT}) t", (tz,))
-        row = cur.fetchone()
-        return (row[0] if row else None) or today
+    return paper_today(tz) - timedelta(days=max(1, days) - 1)
+
 
 # Search path for the secret file, first match wins. Mirrors algotrade's habit of
 # keeping secrets under the user's private dirs, never in the repo.
@@ -657,15 +651,13 @@ def _guard_regex(exc: Exception) -> None:
 
 
 def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
-                    day: date | str | None = None, tz: str = PAPER_TZ,
+                    since: date | None = None, tz: str = PAPER_TZ,
                     limit: int = 100, offset: int = 0) -> list[dict]:
     """Latest snapshot per article, newest first.
 
-    `day` restricts to one publication date, read in the papers' timezone;
-    pass the string "today" to mean the current one there.
+    `since` keeps only articles published on or after that calendar date,
+    read in the papers' timezone.
     """
-    if day == "today":
-        day = resolve_day(conn, tz)
     sql = """
         SELECT DISTINCT ON (a.id)
                a.id, a.canonical_url, a.origin, a.source_file, j.slug AS journal,
@@ -687,16 +679,17 @@ def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
     """
     with conn.cursor() as cur:
         try:
-            # The day is matched outside the DISTINCT ON, against the snapshot
-            # actually shown. Filtering inside would let an article surface on
-            # an older snapshot's date while displaying the newer one's — and
-            # would no longer agree with the count in dataset_stats.
+            # The date is matched outside the DISTINCT ON, against the
+            # snapshot actually shown. Filtering inside would let an article
+            # surface on an older snapshot's date while displaying the newer
+            # one's — and would no longer agree with the count in
+            # dataset_stats.
             cur.execute(f"SELECT * FROM ({sql}) t "
-                        f"WHERE (%(day)s::date IS NULL "
-                        f"       OR (t.published_at AT TIME ZONE %(tz)s)::date = %(day)s::date) "
+                        f"WHERE (%(since)s::date IS NULL "
+                        f"       OR (t.published_at AT TIME ZONE %(tz)s)::date >= %(since)s::date) "
                         f"ORDER BY published_at DESC NULLS LAST "
                         f"LIMIT %(limit)s OFFSET %(offset)s",
-                        {"q": q, "journal": journal, "day": day, "tz": tz,
+                        {"q": q, "journal": journal, "since": since, "tz": tz,
                          "limit": limit, "offset": offset})
         except Exception as exc:
             _guard_regex(exc)
@@ -1130,13 +1123,13 @@ def dataset_stats(conn) -> dict:
         out["authors"] = cur.fetchone()[0]
         cur.execute("SELECT count(DISTINCT source) FROM article_snapshot WHERE source IS NOT NULL AND source <> ''")
         out["sources"] = cur.fetchone()[0]
-        # Counts the same day the Today subtab lists, so the badge and the
+        # Counts the same window the Today subtab lists, so the badge and the
         # table can never disagree.
-        today = resolve_day(conn)
+        since = paper_window(RECENT_DAYS)
         cur.execute(f"SELECT count(*) FROM ({_LATEST_SNAPSHOT}) t "
-                    f"WHERE (t.published_at AT TIME ZONE %s)::date = %s", (PAPER_TZ, today))
-        out["today"] = cur.fetchone()[0]
-        out["today_date"] = str(today) if today else None
+                    f"WHERE (t.published_at AT TIME ZONE %s)::date >= %s", (PAPER_TZ, since))
+        out["recent"] = cur.fetchone()[0]
+        out["recent_from"] = str(since)
         cur.execute("SELECT count(*) FROM persona"); out["personas"] = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM author_profile"); out["profiles"] = cur.fetchone()[0]
         cur.execute("SELECT origin, count(*) FROM article GROUP BY origin")

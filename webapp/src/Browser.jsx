@@ -6,7 +6,7 @@ import Aggregation from './Aggregation.jsx'
 import Population from './Population.jsx'
 
 const SUBTABS = [
-  { id: 'today', label: 'Today', statKey: 'today' },
+  { id: 'recent', label: 'Yesterday–Today', statKey: 'recent' },
   { id: 'articles', label: 'Articles', statKey: 'articles' },
   { id: 'commenters', label: 'Commenters', statKey: 'commenters' },
   { id: 'people', label: 'People', statKey: 'personas' },
@@ -26,22 +26,14 @@ const fmtDate = (v) => {
 // another one would otherwise see hours that contradict the heading.
 const PAPER_TZ = 'Europe/Zurich'
 
-// Within a single day the date is the same on every row, so the hour is the
-// only part that tells the reader anything.
-const fmtTime = (v) => {
+// Across a two-day window the year and month say nothing; the weekday and the
+// hour are what place an article in the news cycle.
+const fmtWhen = (v) => {
   if (!v) return '—'
   try {
-    return new Date(v).toLocaleTimeString(undefined,
-      { timeZone: PAPER_TZ, hour: '2-digit', minute: '2-digit' })
+    return new Date(v).toLocaleString(undefined,
+      { timeZone: PAPER_TZ, weekday: 'short', hour: '2-digit', minute: '2-digit' })
   } catch { return '—' }
-}
-
-// Today's date in Zurich, as YYYY-MM-DD, to compare against the day the
-// daemon says it served.
-const paperToday = () => {
-  try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: PAPER_TZ }).format(new Date())
-  } catch { return '' }
 }
 
 // A YYYY-MM-DD read as a plain calendar date, not as an instant — pinned to
@@ -91,12 +83,12 @@ export default function Browser({ connected, send, route, navigate, back }) {
       <div className="browser">
         {!connected && <div className="empty">Daemon offline.</div>}
 
-        {connected && (tab === 'today' || tab === 'articles') && (
+        {connected && (tab === 'recent' || tab === 'articles') && (
           open
             ? <ArticleView articleId={open} send={send}
                 onBack={close} onNick={showNick} />
             : <ArticleList send={send} onOpen={openHere}
-                day={tab === 'today' ? 'today' : null} />
+                days={tab === 'recent' ? 2 : 0} />
         )}
 
         {connected && tab === 'commenters' && (
@@ -143,21 +135,23 @@ function useQuery(send, cmd, key, params = {}) {
   return [rows, err, resp]
 }
 
-// `day` restricts the list to one publication date, resolved on the daemon in
-// the papers' own timezone. The Today subtab passes 'today'; the Articles
-// subtab passes nothing and lists the whole corpus.
-function ArticleList({ send, onOpen, day = null }) {
+// `days` restricts the list to a window of that many calendar days ending on
+// the papers' current one, resolved on the daemon in the papers' own timezone.
+// The Yesterday–Today subtab passes 2; the Articles subtab passes nothing and
+// lists the whole corpus.
+function ArticleList({ send, onOpen, days = 0 }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
   const [rows, err, resp] = useQuery(send, 'browse_articles', 'articles',
-    { q: term || null, day, limit: 300 })
-  // Which day the daemon settled on. Between midnight and the papers' first
-  // article of the morning it is not the current one, and saying so is the
-  // whole point — an unlabelled "Today" that quietly shows yesterday would be
-  // worse than an empty one.
-  const shown = resp?.day || null
-  const stale = shown && shown !== paperToday()
-  const empty = day ? 'No articles collected yet.' : 'No articles.'
+    { q: term || null, days, limit: 300 })
+  // The daemon names the window it served. Saying which days these are is the
+  // point: past midnight in Zurich the current day is usually still empty, and
+  // a list that silently showed only yesterday under a "Today" heading would
+  // be read as today's.
+  const span = days && resp?.since && resp?.today
+    ? `${fmtDay(resp.since)} and ${fmtDay(resp.today)}, Swiss time`
+    : null
+  const empty = days ? 'Nothing published in the last two days.' : 'No articles.'
   return (
     <>
       <div className="toolbar">
@@ -165,23 +159,19 @@ function ArticleList({ send, onOpen, day = null }) {
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && setTerm(q)} />
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
-        {day && shown && <span className="subtle">
-          {stale
-            ? `Nothing published yet on ${fmtDay(paperToday())} — showing ${fmtDay(shown)}, the most recent day with articles`
-            : `Published ${fmtDay(shown)}, Swiss time`}
-        </span>}
+        {span && <span className="subtle">Published {span}</span>}
       </div>
       {err && <div className="banner warn">{err}</div>}
       {!rows ? <div className="empty">Loading…</div> : rows.length === 0 ? <div className="empty">{empty}</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>{day ? 'Time' : 'Published'}</th><th>Headline</th><th>Journal</th><th>Section</th>
+            <th>Published</th><th>Headline</th><th>Journal</th><th>Section</th>
             <th>Author</th><th>Source</th><th className="num">Comments</th>
           </tr></thead>
           <tbody>
             {rows.map((a) => (
               <tr key={a.id} className="rowlink" onClick={() => onOpen(a.id)}>
-                <td>{day ? fmtTime(a.published_at) : fmtDate(a.published_at)}</td>
+                <td>{days ? fmtWhen(a.published_at) : fmtDate(a.published_at)}</td>
                 <td style={{ whiteSpace: 'normal', maxWidth: 460 }}>
                   {a.headline || '(untitled)'}
                   {a.origin === 'pdf' && <span className="chip pdf">archive</span>}
