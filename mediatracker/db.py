@@ -650,13 +650,14 @@ def _guard_regex(exc: Exception) -> None:
     raise exc
 
 
-def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
+def browse_articles(conn, *, q: str | None = None, journals: list[str] | None = None,
                     since: date | None = None, tz: str = PAPER_TZ,
                     limit: int = 100, offset: int = 0) -> list[dict]:
     """Latest snapshot per article, newest first.
 
     `since` keeps only articles published on or after that calendar date,
-    read in the papers' timezone.
+    read in the papers' timezone. `journals` keeps only those title slugs —
+    an empty list keeps none, which is what unticking every box means.
     """
     sql = """
         SELECT DISTINCT ON (a.id)
@@ -674,7 +675,7 @@ def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
         -- Search is a case-insensitive POSIX regex (~*). Casts are required:
         -- without them Postgres cannot infer the type of a bare "$1 IS NULL".
         WHERE (%(q)s::text IS NULL OR s.headline ~* %(q)s::text)
-          AND (%(journal)s::text IS NULL OR j.slug = %(journal)s::text)
+          AND (%(journals)s::text[] IS NULL OR j.slug = ANY(%(journals)s::text[]))
         ORDER BY a.id, s.fetched_at DESC
     """
     with conn.cursor() as cur:
@@ -689,10 +690,37 @@ def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
                         f"       OR (t.published_at AT TIME ZONE %(tz)s)::date >= %(since)s::date) "
                         f"ORDER BY published_at DESC NULLS LAST "
                         f"LIMIT %(limit)s OFFSET %(offset)s",
-                        {"q": q, "journal": journal, "since": since, "tz": tz,
+                        {"q": q, "journals": journals, "since": since, "tz": tz,
                          "limit": limit, "offset": offset})
         except Exception as exc:
             _guard_regex(exc)
+        return _rows(cur)
+
+
+def window_journal_counts(conn, since: date | None = None,
+                          tz: str = PAPER_TZ) -> list[dict]:
+    """Per-title article counts for a window, before any journal filter.
+
+    Deliberately unfiltered: the tick boxes have to say what unticking would
+    remove, so they cannot be counted from the filtered list they control.
+    Titles with nothing in the window are still listed, at zero.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH latest AS (
+                SELECT DISTINCT ON (a.id) a.id, a.journal_id, s.published_at
+                FROM article a
+                LEFT JOIN article_snapshot s ON s.article_id = a.id
+                ORDER BY a.id, s.fetched_at DESC
+            )
+            SELECT j.slug, j.name, count(l.id) AS n
+            FROM journal j
+            LEFT JOIN latest l ON l.journal_id = j.id
+                 AND (%s::date IS NULL
+                      OR (l.published_at AT TIME ZONE %s)::date >= %s::date)
+            GROUP BY j.slug, j.name
+            ORDER BY j.slug
+        """, (since, tz, since))
         return _rows(cur)
 
 

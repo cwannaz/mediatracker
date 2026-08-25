@@ -205,11 +205,17 @@ class Server:
             # name the days it is actually showing.
             days = int(msg.get("days") or 0)
             since = db.paper_window(days) if days else None
+            # An empty list is a real filter — every box unticked — so it must
+            # survive the trip as [] and not collapse to "no filter".
+            journals = msg.get("journals")
+            if not isinstance(journals, list):
+                journals = None
             return ok(cmd,
                       since=str(since) if since else None,
                       today=str(db.paper_today()),
+                      journals=db.window_journal_counts(self.conn, since) if days else None,
                       articles=db.browse_articles(
-                          self.conn, q=q, journal=msg.get("journal") or None,
+                          self.conn, q=q, journals=journals,
                           since=since, limit=limit, offset=offset))
         if cmd == "get_article":
             art = db.get_article(self.conn, msg["article_id"], msg.get("snapshot_id"))

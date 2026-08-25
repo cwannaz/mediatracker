@@ -26,6 +26,8 @@ const fmtDate = (v) => {
 // another one would otherwise see hours that contradict the heading.
 const PAPER_TZ = 'Europe/Zurich'
 
+const EMPTY = new Set()
+
 // Across a two-day window the year and month say nothing; the weekday and the
 // hour are what place an article in the news cycle.
 const fmtWhen = (v) => {
@@ -59,6 +61,16 @@ export default function Browser({ connected, send, route, navigate, back }) {
     send('dataset_stats').then((r) => { if (r.ok) setStats(r) }).catch(() => {})
   }, [connected, send])
 
+  // Which titles the Yesterday–Today list hides. Held here rather than inside
+  // the list so that opening an article and coming back does not reset it, and
+  // stored as the excluded set so a title added later starts visible.
+  const [hidden, setHidden] = useState(() => new Set())
+  const toggleJournal = useCallback((slug) => setHidden((h) => {
+    const next = new Set(h)
+    if (next.has(slug)) next.delete(slug); else next.add(slug)
+    return next
+  }), [])
+
   const showNick = useCallback((nick) => navigate(['commenters', nick]), [navigate])
   const showPersona = useCallback((id) => navigate(['people', id]), [navigate])
   const showArticle = useCallback((id) => navigate(['articles', id]), [navigate])
@@ -88,7 +100,8 @@ export default function Browser({ connected, send, route, navigate, back }) {
             ? <ArticleView articleId={open} send={send}
                 onBack={close} onNick={showNick} />
             : <ArticleList send={send} onOpen={openHere}
-                days={tab === 'recent' ? 2 : 0} />
+                days={tab === 'recent' ? 2 : 0}
+                hidden={hidden} onToggleJournal={toggleJournal} />
         )}
 
         {connected && tab === 'commenters' && (
@@ -139,19 +152,34 @@ function useQuery(send, cmd, key, params = {}) {
 // the papers' current one, resolved on the daemon in the papers' own timezone.
 // The Yesterday–Today subtab passes 2; the Articles subtab passes nothing and
 // lists the whole corpus.
-function ArticleList({ send, onOpen, days = 0 }) {
+function ArticleList({ send, onOpen, days = 0, hidden = EMPTY, onToggleJournal }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
+  // The titles present in the window, counted before the filter — the daemon
+  // reports them so the boxes can say what unticking would remove.
+  const [titles, setTitles] = useState([])
+  // Send a filter only once something is hidden: an empty selection means
+  // "show nothing", which is right when every box is unticked and wrong as a
+  // starting state.
+  const selected = hidden.size && titles.length
+    ? titles.filter((t) => !hidden.has(t.slug)).map((t) => t.slug)
+    : null
   const [rows, err, resp] = useQuery(send, 'browse_articles', 'articles',
-    { q: term || null, days, limit: 300 })
+    { q: term || null, days, journals: selected, limit: 300 })
   // The daemon names the window it served. Saying which days these are is the
   // point: past midnight in Zurich the current day is usually still empty, and
   // a list that silently showed only yesterday under a "Today" heading would
   // be read as today's.
+  // The title list is filter-independent, so it is kept rather than re-read
+  // from each reply — it must not disappear when every box is unticked.
+  useEffect(() => { if (resp?.journals) setTitles(resp.journals) }, [resp])
+
   const span = days && resp?.since && resp?.today
     ? `${fmtDay(resp.since)} and ${fmtDay(resp.today)}, Swiss time`
     : null
-  const empty = days ? 'Nothing published in the last two days.' : 'No articles.'
+  const empty = !days ? 'No articles.'
+    : selected && selected.length === 0 ? 'Every title is unticked.'
+    : 'Nothing published in the last two days.'
   return (
     <>
       <div className="toolbar">
@@ -161,6 +189,17 @@ function ArticleList({ send, onOpen, days = 0 }) {
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
         {span && <span className="subtle">Published {span}</span>}
       </div>
+      {!!days && titles.length > 0 && (
+        <div className="toolbar filters">
+          {titles.map((t) => (
+            <label key={t.slug} className="filter">
+              <input type="checkbox" checked={!hidden.has(t.slug)}
+                onChange={() => onToggleJournal?.(t.slug)} />
+              {t.name}<span className="count">{t.n}</span>
+            </label>
+          ))}
+        </div>
+      )}
       {err && <div className="banner warn">{err}</div>}
       {!rows ? <div className="empty">Loading…</div> : rows.length === 0 ? <div className="empty">{empty}</div> : (
         <div className="table-wrap"><table>
