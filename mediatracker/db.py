@@ -1081,6 +1081,154 @@ def dataset_stats(conn) -> dict:
     return out
 
 
+# A comment's local desk is the article's own section, which is identical on
+# both titles of a shared backend. That makes it a property of the CONTENT and
+# not of whichever title's article row the comment happens to hang on — the
+# only regional signal in this community that scan order cannot distort.
+_DESK_CTE = """
+WITH desk AS (
+    SELECT a.id AS article_id, a.source_key, j.slug,
+           CASE split_part(s.section, '/', 1)
+                WHEN 'geneve'       THEN 'geneva'
+                WHEN 'vaud-regions' THEN 'vaud'
+                WHEN 'valais'       THEN 'valais'
+                ELSE 'national' END AS desk
+    FROM article a
+    JOIN journal j ON j.id = a.journal_id
+    JOIN LATERAL (
+        SELECT section FROM article_snapshot
+        WHERE article_id = a.id ORDER BY fetched_at DESC LIMIT 1
+    ) s ON true
+    WHERE j.community = 'tx-romandie'
+),
+-- The two titles do not always agree on whether a syndicated story is local.
+-- A Vaud story is 'vaud-regions' for 24 heures and 'suisse' for the Tribune;
+-- a Geneva story is the mirror image. Where they disagree the article cannot
+-- be evidence that a reader chose local content, because which desk they met
+-- it under depends on which title they were reading — which the shared comment
+-- thread does not record. Those articles are excluded from the local counts.
+contested AS (
+    SELECT source_key FROM desk WHERE source_key IS NOT NULL
+    GROUP BY source_key
+    HAVING count(DISTINCT slug) > 1 AND count(DISTINCT desk) > 1
+),
+reader AS (
+    SELECT cm.author_nick AS nick,
+           count(*) FILTER (WHERE d.desk = 'geneva')   AS ge,
+           count(*) FILTER (WHERE d.desk = 'vaud')     AS vd,
+           count(*) FILTER (WHERE d.desk = 'national') AS na
+    FROM comment cm JOIN desk d ON d.article_id = cm.article_id
+    WHERE cm.author_nick IS NOT NULL
+      AND (d.source_key IS NULL OR d.source_key NOT IN (SELECT source_key FROM contested))
+    GROUP BY 1
+),
+lean AS (
+    -- "both" only when the weaker side is at least a third of the stronger;
+    -- a single stray comment on the other canton is not a readership.
+    SELECT nick, ge, vd, na,
+           CASE WHEN ge = 0 AND vd = 0 THEN 'none'
+                WHEN ge > 0 AND vd > 0
+                     AND least(ge, vd)::float / greatest(ge, vd) >= 0.34 THEN 'both'
+                WHEN ge > vd THEN 'geneva' ELSE 'vaud' END AS lean
+    FROM reader
+)
+"""
+
+
+def desk_overview(conn) -> dict:
+    """Local-desk analysis for the shared Geneva/Vaud comment backend.
+
+    The two titles share every syndicated article, so which title a comment sits
+    under says nothing about the commenter. Which LOCAL DESK they choose to
+    comment on does, and it is behavioural rather than read out of their prose.
+    """
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute(_DESK_CTE + """
+            , content AS (
+                SELECT source_key, min(desk) AS desk, count(DISTINCT slug) AS n_slugs
+                FROM desk WHERE source_key IS NOT NULL
+                GROUP BY source_key
+            )
+            SELECT desk,
+                   count(*) FILTER (WHERE n_slugs > 1) AS shared,
+                   count(*) FILTER (WHERE n_slugs = 1) AS exclusive
+            FROM content GROUP BY desk ORDER BY count(*) DESC
+        """)
+        out["articles"] = _rows(cur)
+
+        cur.execute(_DESK_CTE + "SELECT lean, count(*) AS n FROM lean GROUP BY 1 ORDER BY 2 DESC")
+        out["readers"] = _rows(cur)
+
+        cur.execute(_DESK_CTE + """
+            SELECT (SELECT count(*) FROM contested)                       AS contested_articles,
+                   (SELECT count(*) FROM desk WHERE source_key IS NOT NULL) AS article_rows,
+                   (SELECT count(*) FROM comment cm JOIN desk d
+                      ON d.article_id = cm.article_id
+                     WHERE d.source_key IN (SELECT source_key FROM contested))
+                                                                          AS comments_excluded
+        """)
+        got = _rows(cur)
+        out["contested"] = got[0] if got else {}
+
+        # The two readerships compared on everything the profiling pass produced.
+        cur.execute(_DESK_CTE + """
+            SELECT l.lean,
+                   count(*) AS n,
+                   count(*) FILTER (WHERE p.politics->>'overall'
+                        IN ('left','centre-left','far-left'))        AS left_of_centre,
+                   count(*) FILTER (WHERE p.politics->>'overall'
+                        IN ('right','centre-right','far-right'))     AS right_of_centre,
+                   count(*) FILTER (WHERE p.politics->>'overall'
+                        IN ('mixed','unclear'))                      AS unaligned,
+                   count(*) FILTER (WHERE p.language->>'mastery'
+                        IN ('native-fluent','fluent'))               AS fluent_plus,
+                   round(avg((p.language->>'error_rate_per_100_words')::float)::numeric, 2) AS mean_err,
+                   round(avg(p.n_comments)::numeric, 1)              AS mean_dossier
+            FROM lean l
+            JOIN author_profile p
+              ON p.community = 'tx-romandie' AND p.subject_kind = 'nick'
+             AND p.subject_key = l.nick
+            WHERE l.lean IN ('geneva','vaud')
+            GROUP BY 1 ORDER BY 1
+        """)
+        out["compare"] = _rows(cur)
+
+        # Independence audit. A region marker that describes WHICH THREADS the
+        # subject commented on is the behavioural signal restated, so agreement
+        # on those subjects proves nothing. Only markers quoting the subject's
+        # own words make the two measures independent.
+        cur.execute(_DESK_CTE + """
+            SELECT
+              count(*) FILTER (WHERE NOT thready)                       AS text_only,
+              count(*) FILTER (WHERE thready AND NOT all_thready)       AS mixed,
+              count(*) FILTER (WHERE all_thready)                       AS thread_only,
+              count(*) FILTER (WHERE NOT thready AND testable)          AS independent_testable,
+              count(*) FILTER (WHERE NOT thready AND testable
+                               AND expected = lean)                     AS independent_agree
+            FROM (
+              SELECT p.subject_key, l.lean,
+                     lower(p.region->>'guess') AS expected,
+                     l.lean IN ('geneva','vaud')
+                       AND p.region->>'guess' IN ('Geneva','Vaud')      AS testable,
+                     EXISTS (SELECT 1 FROM jsonb_array_elements_text(p.region->'markers') m
+                             WHERE m ~* '(comments? on|engaged? with|writes only on|follows|thread|desk)')
+                       AS thready,
+                     NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(p.region->'markers') m
+                             WHERE m !~* '(comments? on|engaged? with|writes only on|follows|thread|desk)')
+                       AS all_thready
+              FROM author_profile p
+              JOIN lean l ON l.nick = p.subject_key
+              WHERE p.community = 'tx-romandie' AND p.subject_kind = 'nick'
+                AND p.region ? 'markers'
+                AND jsonb_array_length(p.region->'markers') > 0
+            ) t
+        """)
+        got = _rows(cur)
+        out["independence"] = got[0] if got else {}
+    return out
+
+
 def findings_overview(conn) -> dict:
     """Every live figure the Findings tab quotes, in one round trip.
 
@@ -1162,6 +1310,8 @@ def findings_overview(conn) -> dict:
 
         # Nicknames present in more than one community. Kept as separate
         # subjects on purpose; this is the list that makes that testable.
+        out["desks"] = desk_overview(conn)
+
         cur.execute("""
             WITH per_community AS (
                 SELECT cm.author_nick AS nick, j.community, count(*) AS n

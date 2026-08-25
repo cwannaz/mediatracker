@@ -201,6 +201,180 @@ export const SECTIONS = [
 
   // ------------------------------------------------------------------ //
   {
+    id: 'desks',
+    title: 'Local desks',
+    blurb: 'The two Astro titles share every syndicated article, so which title '
+      + 'a comment sits under says nothing about the commenter. Which LOCAL DESK '
+      + 'they choose to comment on does — and it is behavioural, read from what '
+      + 'they clicked rather than from what they wrote.',
+    findings: [
+      {
+        id: 'desk-split',
+        claim: 'The shared platform carries two local desks that barely overlap',
+        status: 'measured',
+        recorded: '2026-08-24',
+        body: [
+          'Geneva-desk and Vaud-desk articles are almost never carried by the other '
+          + 'title, while national, culture and sport content is shared wholesale. '
+          + 'That gives one comment backend two distinct local readerships sitting '
+          + 'inside it, and a way to tell them apart that does not depend on '
+          + 'reading anybody’s prose.',
+        ],
+        table: (d) => ({
+          cols: ['shared between titles', 'exclusive to one'],
+          rows: (d.desks?.articles || []).map((a) => ({
+            label: a.desk, cells: [{ n: a.shared }, { n: a.exclusive }],
+          })),
+        }),
+        figures: (d) => {
+          const r = d.desks?.readers || []
+          const get = (k) => Number(r.find((x) => x.lean === k)?.n || 0)
+          const one = get('geneva') + get('vaud')
+          return [
+            { k: 'Commenters reading one local desk', v: one },
+            { k: 'Reading both in earnest', v: get('both'), hi: true },
+            { k: 'No local comments at all', v: get('none') },
+          ]
+        },
+        caveat: 'Almost nobody engages with both. Two readerships share a comment '
+          + 'thread on national news and separate completely on local news, which '
+          + 'is the strongest argument yet that keeping them in one community was '
+          + 'right for identity and wrong for geography.',
+      },
+      {
+        id: 'desk-contested',
+        claim: 'The two titles disagree about what counts as local, and that had to be measured before anything was built on it',
+        status: 'measured',
+        recorded: '2026-08-24',
+        body: [
+          'A Vaud story is filed under vaud-regions by 24 heures and under suisse by '
+          + 'the Tribune; a Geneva story is the mirror image. Same content, same '
+          + 'comment thread, two different editorial framings of whether it is on '
+          + 'the reader’s doorstep.',
+          'That is interesting in itself, and it is also a threat to the measure: '
+          + 'for those articles the desk a reader met the story under depends on '
+          + 'which title they were reading, which the shared thread does not '
+          + 'record. They are therefore excluded from the local counts entirely. '
+          + 'Seven of the 117 profiled subjects lose their local signal as a '
+          + 'result, and are counted as having none rather than being guessed at.',
+        ],
+        figures: (d) => {
+          const c = d.desks?.contested || {}
+          return [
+            { k: 'Articles the two titles file differently', v: c.contested_articles },
+            { k: 'Comments excluded from the measure', v: c.comments_excluded },
+            { k: 'Article rows in the community', v: c.article_rows },
+          ]
+        },
+      },
+      {
+        id: 'desk-validates',
+        claim: 'Where the two signals are genuinely independent, they have never yet disagreed',
+        status: 'measured',
+        recorded: '2026-08-24',
+        body: [
+          'The inferred region and the local-desk lean agree for almost every '
+          + 'subject — but that headline had to be thrown away, because the two are '
+          + 'not independent for most of them. Auditing the region markers showed '
+          + 'that only a minority quote the subject’s own words; the rest cite which '
+          + 'threads they commented on, which is the behavioural signal restated. '
+          + 'Agreement on those subjects proves nothing.',
+          'Restricted to subjects whose region rests on quoted words alone — a '
+          + 'helvetism, a street, a statute, a canton named in the first person — '
+          + 'the two measures are independent, and on that subset there is not yet '
+          + 'a single disagreement.',
+        ],
+        figures: (d) => {
+          const i = d.desks?.independence || {}
+          const tot = (i.text_only || 0) + (i.mixed || 0) + (i.thread_only || 0)
+          const p = (n) => (tot ? `${Math.round((n / tot) * 100)}%` : '—')
+          return [
+            { k: 'Region read from quoted words only', v: `${i.text_only} · ${p(i.text_only)}` },
+            { k: 'Markers mixing quotes and thread topics', v: `${i.mixed} · ${p(i.mixed)}` },
+            { k: 'Region resting on thread topics alone', v: `${i.thread_only} · ${p(i.thread_only)}` },
+            { k: 'Independent and testable', v: i.independent_testable },
+            { k: 'Of those, in agreement', v: `${i.independent_agree} of ${i.independent_testable}`, hi: true },
+          ]
+        },
+        caveat: 'Seventeen cases is a small base, and one in five region readings '
+          + 'rests on thread topics alone — those are weaker than their stated '
+          + 'confidence implies and should be re-derived from text before the '
+          + 'region field is used for anything load-bearing.',
+      },
+      {
+        id: 'desk-populations',
+        claim: 'The two local readerships do not differ politically; they may differ in how they write',
+        status: 'inferred',
+        recorded: '2026-08-24',
+        body: [
+          'With the readerships separated behaviourally, they can finally be '
+          + 'compared. On politics they do not separate: the left-of-centre gap runs '
+          + 'the way one might expect but is well inside what these sample sizes can '
+          + 'resolve, and the right-of-centre gap is smaller still.',
+          'The one difference that reaches significance is linguistic — Vaud-desk '
+          + 'readers are rated fluent or better roughly twice as often, and make '
+          + 'fewer errors per hundred words. Mean dossier length is near-identical '
+          + 'between the groups, so it is not an artefact of having more text to '
+          + 'judge. It survives both the permissive and the conservative desk '
+          + 'classification.',
+        ],
+        table: (d) => {
+          const rows = d.desks?.compare || []
+          const g = rows.find((r) => r.lean === 'geneva') || {}
+          const v = rows.find((r) => r.lean === 'vaud') || {}
+          const pc = (n, t) => (t ? `${((n / t) * 100).toFixed(1)}%` : '—')
+          const line = (label, key) => ({
+            label,
+            cells: [
+              { n: g[key], pct: pc(g[key], g.n) },
+              { n: v[key], pct: pc(v[key], v.n) },
+            ],
+          })
+          return {
+            cols: [`Geneva desk (n=${g.n ?? '?'})`, `Vaud desk (n=${v.n ?? '?'})`],
+            rows: [
+              line('left of centre', 'left_of_centre'),
+              line('right of centre', 'right_of_centre'),
+              line('mixed or unclear', 'unaligned'),
+              line('fluent or better', 'fluent_plus'),
+              { label: 'mean errors / 100 words',
+                cells: [{ text: g.mean_err }, { text: v.mean_err }] },
+              { label: 'mean dossier size',
+                cells: [{ text: g.mean_dossier }, { text: v.mean_dossier }] },
+            ],
+          }
+        },
+        caveat: 'Five comparisons were made on one dataset. Only the language '
+          + 'difference clears p<0.05 (p≈0.013) and none clears the p<0.01 a '
+          + 'Bonferroni correction would demand. Treat the language gap as the one '
+          + 'worth collecting more data on, and everything else as no difference '
+          + 'found rather than as no difference.',
+      },
+      {
+        id: 'desk-fails',
+        claim: 'The behavioural measure fails on exactly the people with a cross-cantonal interest',
+        status: 'observed',
+        recorded: '2026-08-24',
+        body: [
+          'The one subject whose desk lean contradicts a text-based region reading '
+          + 'commented five times on Geneva’s education-funding row and once on '
+          + 'anything Vaud — while telling the thread, at length, that he was born '
+          + 'in 1942, was a worker’s son, and got a scholarship to the engineering '
+          + 'school in Lausanne.',
+          'He is not a Geneva reader. He is a Vaud reader with a lifelong interest '
+          + 'in education funding, which pulled him onto another canton’s desk. That '
+          + 'is the failure mode of the measure, and it is the one the text reading '
+          + 'catches, which is why both are kept rather than one being preferred.',
+        ],
+        evidence: [
+          { quote: 'Né en 1942, fils d’ouvrier, comme j’étais bon élève, j’ai obtenu une bourse grâce à laquelle j’ai pu faire des études à l’EPFL', who: 'cristobal02', note: 'inferred Vaud from text; comments almost only on the Geneva education desk' },
+        ],
+      },
+    ],
+  },
+
+  // ------------------------------------------------------------------ //
+  {
     id: 'writing',
     title: 'How this public writes',
     blurb: 'Language mastery is inferred from a full reading of each dossier; '
