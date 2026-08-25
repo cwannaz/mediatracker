@@ -330,13 +330,27 @@ def _fit_to_budget(comments: list[dict], max_chars: int) -> tuple[list[dict], bo
     return head + picked + tail, True
 
 
-def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
+def manifest_path(community: str | None) -> str:
+    """One manifest per community. Dossier ids embed the subject's index, so a
+    community that is exported later must not renumber a community already
+    profiled — keeping the manifests apart is what prevents that."""
+    return f"{OUT_DIR}/manifest.json" if community is None \
+        else f"{OUT_DIR}/manifest-{_safe(community)}.json"
+
+
+def export(conn, min_comments: int, max_chars: int = 60000,
+           community: str | None = None) -> list[dict]:
     os.makedirs(f"{OUT_DIR}/dossiers", exist_ok=True)
     subjects = build_subjects(conn, min_comments)
+    if community is not None:
+        subjects = [s for s in subjects if s["community"] == community]
     manifest = []
     for i, s in enumerate(subjects):
         m = measure(s["comments"])
-        sid = f"{'p' if s['kind']=='persona' else 'n'}_{_safe(s['label'])}_{i:04d}"
+        # The community is part of the id too: two platforms can each have a
+        # "Taguenet", and they are two subjects with two dossiers.
+        sid = (f"{'p' if s['kind']=='persona' else 'n'}"
+               f"_{_safe(s['community'])}_{_safe(s['label'])}_{i:04d}")
         lines = [
             f"SUBJECT: {s['label']}",
             f"kind: {s['kind']}   aliases: {', '.join(s['aliases'])}",
@@ -374,7 +388,7 @@ def export(conn, min_comments: int, max_chars: int = 60000) -> list[dict]:
             "last_seen": str(dated[-1]) if dated else None,
             "metrics": m,
         })
-    with open(f"{OUT_DIR}/manifest.json", "w", encoding="utf-8") as fh:
+    with open(manifest_path(community), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, ensure_ascii=False, indent=1)
     return manifest
 
@@ -483,8 +497,14 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mediatracker.profiling")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    e = sub.add_parser("export"); e.add_argument("--min-comments", type=int, default=5)
-    i = sub.add_parser("ingest"); i.add_argument("records")
+    e = sub.add_parser("export")
+    e.add_argument("--min-comments", type=int, default=5)
+    e.add_argument("--community", default=None,
+                   help="export only this community's subjects, to its own manifest")
+    i = sub.add_parser("ingest")
+    i.add_argument("records")
+    i.add_argument("--community", default=None,
+                   help="the community whose manifest these records belong to")
     sub.add_parser("stats")
     args = ap.parse_args(argv)
 
@@ -495,12 +515,12 @@ def main(argv=None) -> int:
     db.ensure_schema(conn)
 
     if args.cmd == "export":
-        man = export(conn, args.min_comments)
+        man = export(conn, args.min_comments, community=args.community)
         chars = sum(m["n_chars"] for m in man)
         print(f"{len(man)} dossiers written to {OUT_DIR}/dossiers ({chars:,} chars)")
-        print(f"manifest: {OUT_DIR}/manifest.json")
+        print(f"manifest: {manifest_path(args.community)}")
     elif args.cmd == "ingest":
-        man = {m["id"]: m for m in json.load(open(f"{OUT_DIR}/manifest.json"))}
+        man = {m["id"]: m for m in json.load(open(manifest_path(args.community)))}
         # Dossier ids carry the subject's position in the manifest, so the
         # manifest cannot be regenerated without renumbering profiles that are
         # already written. Refresh each entry's measurements in place instead,
