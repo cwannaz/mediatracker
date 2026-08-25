@@ -44,6 +44,39 @@ PAPER_TZ = "Europe/Zurich"
 def paper_today(tz: str = PAPER_TZ) -> date:
     return datetime.now(ZoneInfo(tz)).date()
 
+
+# One row per article, carrying the publication date of the snapshot that is
+# actually displayed. A re-scan that corrects a timestamp therefore moves an
+# article between days instead of putting it on both.
+_LATEST_SNAPSHOT = """
+    SELECT DISTINCT ON (a.id) s.published_at
+    FROM article a
+    LEFT JOIN article_snapshot s ON s.article_id = a.id
+    ORDER BY a.id, s.fetched_at DESC
+"""
+
+
+def resolve_day(conn, tz: str = PAPER_TZ) -> date | None:
+    """The day the Today view should show.
+
+    Normally the papers' current calendar day. But the Swiss titles publish
+    almost nothing between midnight and the early morning, so for those hours
+    a strict reading of "today" would be a blank page — and the machine
+    running this daemon need not even be in the same day as Zurich. It falls
+    back to the most recent day that has articles; the view says which day it
+    ended up showing.
+    """
+    today = paper_today(tz)
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT count(*) FROM ({_LATEST_SNAPSHOT}) t "
+                    f"WHERE (t.published_at AT TIME ZONE %s)::date = %s", (tz, today))
+        if cur.fetchone()[0]:
+            return today
+        cur.execute(f"SELECT max((t.published_at AT TIME ZONE %s)::date) "
+                    f"FROM ({_LATEST_SNAPSHOT}) t", (tz,))
+        row = cur.fetchone()
+        return (row[0] if row else None) or today
+
 # Search path for the secret file, first match wins. Mirrors algotrade's habit of
 # keeping secrets under the user's private dirs, never in the repo.
 _SECRET_NAME = "secret_postgre.env"
@@ -632,7 +665,7 @@ def browse_articles(conn, *, q: str | None = None, journal: str | None = None,
     pass the string "today" to mean the current one there.
     """
     if day == "today":
-        day = paper_today(tz)
+        day = resolve_day(conn, tz)
     sql = """
         SELECT DISTINCT ON (a.id)
                a.id, a.canonical_url, a.origin, a.source_file, j.slug AS journal,
@@ -1097,19 +1130,13 @@ def dataset_stats(conn) -> dict:
         out["authors"] = cur.fetchone()[0]
         cur.execute("SELECT count(DISTINCT source) FROM article_snapshot WHERE source IS NOT NULL AND source <> ''")
         out["sources"] = cur.fetchone()[0]
-        cur.execute("""
-            -- Counted the same way the Today subtab lists them: the article's
-            -- latest snapshot decides the publication date, so a re-scan that
-            -- corrects a timestamp moves the article rather than duplicating it.
-            SELECT count(*) FROM (
-                SELECT DISTINCT ON (a.id) s.published_at
-                FROM article a
-                LEFT JOIN article_snapshot s ON s.article_id = a.id
-                ORDER BY a.id, s.fetched_at DESC
-            ) t
-            WHERE (t.published_at AT TIME ZONE %s)::date = %s
-        """, (PAPER_TZ, paper_today()))
+        # Counts the same day the Today subtab lists, so the badge and the
+        # table can never disagree.
+        today = resolve_day(conn)
+        cur.execute(f"SELECT count(*) FROM ({_LATEST_SNAPSHOT}) t "
+                    f"WHERE (t.published_at AT TIME ZONE %s)::date = %s", (PAPER_TZ, today))
         out["today"] = cur.fetchone()[0]
+        out["today_date"] = str(today) if today else None
         cur.execute("SELECT count(*) FROM persona"); out["personas"] = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM author_profile"); out["profiles"] = cur.fetchone()[0]
         cur.execute("SELECT origin, count(*) FROM article GROUP BY origin")

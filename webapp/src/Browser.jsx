@@ -36,11 +36,22 @@ const fmtTime = (v) => {
   } catch { return '—' }
 }
 
-const paperDay = () => {
+// Today's date in Zurich, as YYYY-MM-DD, to compare against the day the
+// daemon says it served.
+const paperToday = () => {
   try {
-    return new Date().toLocaleDateString(undefined,
-      { timeZone: PAPER_TZ, weekday: 'long', day: 'numeric', month: 'long' })
-  } catch { return 'today' }
+    return new Intl.DateTimeFormat('en-CA', { timeZone: PAPER_TZ }).format(new Date())
+  } catch { return '' }
+}
+
+// A YYYY-MM-DD read as a plain calendar date, not as an instant — pinned to
+// midday UTC so no timezone can shift it onto the neighbouring day.
+const fmtDay = (iso) => {
+  if (!iso) return ''
+  try {
+    return new Date(`${iso}T12:00:00Z`).toLocaleDateString(undefined,
+      { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' })
+  } catch { return iso }
 }
 
 export default function Browser({ connected, send, route, navigate, back }) {
@@ -118,16 +129,18 @@ export default function Browser({ connected, send, route, navigate, back }) {
 function useQuery(send, cmd, key, params = {}) {
   const [rows, setRows] = useState(null)
   const [err, setErr] = useState(null)
+  const [resp, setResp] = useState(null)   // the rest of the reply, for callers that need it
   const dep = JSON.stringify(params)
   useEffect(() => {
     let alive = true
     send(cmd, params).then((r) => {
       if (!alive) return
+      setResp(r)
       if (r.ok) { setRows(r[key] || []); setErr(null) } else { setErr(r.error); setRows([]) }
     }).catch(() => {})
     return () => { alive = false }
   }, [cmd, key, dep])  // eslint-disable-line
-  return [rows, err]
+  return [rows, err, resp]
 }
 
 // `day` restricts the list to one publication date, resolved on the daemon in
@@ -136,11 +149,15 @@ function useQuery(send, cmd, key, params = {}) {
 function ArticleList({ send, onOpen, day = null }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
-  const [rows, err] = useQuery(send, 'browse_articles', 'articles',
+  const [rows, err, resp] = useQuery(send, 'browse_articles', 'articles',
     { q: term || null, day, limit: 300 })
-  const empty = day
-    ? 'Nothing published today yet — or today’s scan has not run.'
-    : 'No articles.'
+  // Which day the daemon settled on. Between midnight and the papers' first
+  // article of the morning it is not the current one, and saying so is the
+  // whole point — an unlabelled "Today" that quietly shows yesterday would be
+  // worse than an empty one.
+  const shown = resp?.day || null
+  const stale = shown && shown !== paperToday()
+  const empty = day ? 'No articles collected yet.' : 'No articles.'
   return (
     <>
       <div className="toolbar">
@@ -148,7 +165,11 @@ function ArticleList({ send, onOpen, day = null }) {
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && setTerm(q)} />
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
-        {day && <span className="subtle">Published {paperDay()}, Swiss time</span>}
+        {day && shown && <span className="subtle">
+          {stale
+            ? `Nothing published yet on ${fmtDay(paperToday())} — showing ${fmtDay(shown)}, the most recent day with articles`
+            : `Published ${fmtDay(shown)}, Swiss time`}
+        </span>}
       </div>
       {err && <div className="banner warn">{err}</div>}
       {!rows ? <div className="empty">Loading…</div> : rows.length === 0 ? <div className="empty">{empty}</div> : (

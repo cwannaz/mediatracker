@@ -201,9 +201,16 @@ class Server:
         if cmd == "dataset_stats":
             return ok(cmd, **db.dataset_stats(self.conn))
         if cmd == "browse_articles":
-            return ok(cmd, articles=db.browse_articles(
-                self.conn, q=q, journal=msg.get("journal") or None,
-                day=msg.get("day") or None, limit=limit, offset=offset))
+            # "today" is resolved here rather than in the query so the view
+            # can be told which day it actually got — before the papers' first
+            # article of the day, that is not the current one.
+            day = msg.get("day") or None
+            if day == "today":
+                day = db.resolve_day(self.conn)
+            return ok(cmd, day=str(day) if day else None,
+                      articles=db.browse_articles(
+                          self.conn, q=q, journal=msg.get("journal") or None,
+                          day=day, limit=limit, offset=offset))
         if cmd == "get_article":
             art = db.get_article(self.conn, msg["article_id"], msg.get("snapshot_id"))
             return ok(cmd, article=art) if art else error(cmd, "article not found")
