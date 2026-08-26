@@ -4,6 +4,7 @@ import CommenterView from './CommenterView.jsx'
 import PersonaView from './PersonaView.jsx'
 import Aggregation from './Aggregation.jsx'
 import Population from './Population.jsx'
+import Proximity from './Proximity.jsx'
 
 const SUBTABS = [
   { id: 'recent', label: 'Yesterday–Today', statKey: 'recent' },
@@ -11,6 +12,7 @@ const SUBTABS = [
   { id: 'commenters', label: 'Commenters', statKey: 'commenters' },
   { id: 'people', label: 'People', statKey: 'personas' },
   { id: 'aggregation', label: 'Aggregation' },
+  { id: 'proximity', label: 'Proximity' },
   { id: 'population', label: 'Population', statKey: 'profiles' },
   { id: 'authors', label: 'Authors', statKey: 'authors' },
   { id: 'sources', label: 'Sources', statKey: 'sources' },
@@ -119,6 +121,7 @@ export default function Browser({ connected, send, route, navigate, back }) {
         )}
 
         {connected && tab === 'aggregation' && <Aggregation send={send} onPersona={showPersona} />}
+        {connected && tab === 'proximity' && <Proximity send={send} />}
 
         {connected && tab === 'population' && (
           <Population send={send} onNick={showNick} onPersona={showPersona} />

@@ -345,3 +345,26 @@ table.compare .pct { margin-left: 6px; font-size: 11px; }
 .filter:hover { color: var(--fg); }
 .filter input { margin: 0; cursor: pointer; }
 .filter .count { color: var(--muted); font-size: 11px; margin-left: 5px; }
+
+/* ---- proximity ---- */
+/* Two subjects drawn against one time axis: the point is to see one series
+   stop as the other starts, so the rows share a scale and a bucket list. */
+.tl-row { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 4px; }
+.tl-label { flex: 0 0 190px; font-size: 12px; text-align: right; padding-bottom: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-row .timeline { flex: 1; height: 52px; }
+/* The two rows must share one axis exactly, so bars divide the row rather than
+   taking a fixed width — otherwise the pair could not be read against each
+   other, which is the whole point of drawing them together. */
+.tl-row .timeline .bar { flex: 1 1 0; min-width: 1px; }
+.timeline .bar.alt { background: var(--brand-gold); }
+.timeline .bar.alt:hover { background: var(--brand-gold); }
+
+.scorecell { position: relative; display: inline-block; min-width: 92px; }
+.scorebar { position: absolute; left: 0; top: 2px; bottom: 2px; border-radius: 3px;
+  background: rgba(255,192,0,.20); }
+.scoretext { position: relative; font-variant-numeric: tabular-nums; }
+.gap { color: var(--brand-gold); font-variant-numeric: tabular-nums; }
+.zbar { display: inline-block; height: 7px; border-radius: 3px; background: var(--surface-3); }
+tr.rowlink.on td { background: var(--surface-2); }
+.toolbar select { max-width: 260px; }

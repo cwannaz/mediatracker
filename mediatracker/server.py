@@ -16,7 +16,7 @@ import logging
 
 import websockets
 
-from . import alias_candidates, blobserver, db, ids, sources
+from . import alias_candidates, blobserver, db, ids, proximity, sources
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -140,7 +140,9 @@ class Server:
                      "create_persona", "add_alias", "remove_alias",
                      "delete_persona", "link_nicks", "alias_candidates",
                      "get_profile", "profile_overview",
-                     "findings_overview"):
+                     "findings_overview", "proximity_pairs",
+                     "proximity_neighbours", "proximity_timeline",
+                     "proximity_calibration"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -220,6 +222,32 @@ class Server:
         if cmd == "get_article":
             art = db.get_article(self.conn, msg["article_id"], msg.get("snapshot_id"))
             return ok(cmd, article=art) if art else error(cmd, "article not found")
+        # Proximity is O(n²) over the subjects and runs in a fraction of a
+        # second at this corpus size; if it ever stops being cheap it wants a
+        # cache, not a smaller default.
+        if cmd == "proximity_pairs":
+            return ok(cmd, **proximity.pairs(
+                self.conn, community=msg.get("community") or None,
+                min_comments=int(msg.get("min_comments") or 8),
+                limit=min(int(msg.get("limit") or 200), 1000),
+                succession_only=bool(msg.get("succession_only")),
+                cross_community=bool(msg.get("cross_community")),
+                sort=msg.get("sort") or "score"))
+        if cmd == "proximity_neighbours":
+            return ok(cmd, **proximity.neighbours(
+                self.conn, kind=msg["kind"], key=str(msg["key"]),
+                community=msg.get("community") or None,
+                min_comments=int(msg.get("min_comments") or 8),
+                limit=min(int(msg.get("limit") or 25), 200)))
+        if cmd == "proximity_timeline":
+            subjects = msg.get("subjects") or []
+            if not isinstance(subjects, list):
+                return error(cmd, "subjects must be a list")
+            return ok(cmd, **proximity.timeline(
+                self.conn, subjects[:12], bucket=msg.get("bucket") or "month"))
+        if cmd == "proximity_calibration":
+            return ok(cmd, **proximity.calibrate(
+                self.conn, min_comments=int(msg.get("min_comments") or 8)))
         if cmd == "browse_commenters":
             return ok(cmd, commenters=db.browse_commenters(
                 self.conn, q=q, limit=limit, offset=offset))
