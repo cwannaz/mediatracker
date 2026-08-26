@@ -166,8 +166,9 @@ export default function ProfilePanel({ nick, personaId, send }) {
           ))}
           <p className="subtle" style={{ marginTop: 12 }}>
             Only what the writer says about themselves, never inferred from their
-            opinions. Recorded categorically: the study keeps no name — of the
-            subject, a relative, an employer or a place.
+            opinions. Recorded as stated — trade, office, schooling, origin —
+            with one exception: the study keeps no name, of the subject or of
+            anyone they mention.
             {milieu.withheld && !/^nothing/i.test(milieu.withheld) &&
               <> <strong>Set aside:</strong> {milieu.withheld}</>}
           </p>
