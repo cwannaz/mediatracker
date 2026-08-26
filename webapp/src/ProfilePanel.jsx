@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 // The inferred half of a subject's profile: gender, language mastery, politics
-// (with drift), philosophy and region. Everything here is an ESTIMATE produced
+// (with drift), philosophy, region and milieu. Everything here is an ESTIMATE produced
 // by the profiling pass, so each block shows its confidence and the verbatim
 // quotes it rests on. Deterministic style measures live in their own card and
 // are deliberately not mixed in.
@@ -41,6 +41,7 @@ export default function ProfilePanel({ nick, personaId, send }) {
   const phil = p.philosophy || {}
   const region = p.region || {}
   const topics = p.topics || {}
+  const milieu = p.milieu || {}
 
   return (
     <>
@@ -148,10 +149,39 @@ export default function ProfilePanel({ nick, personaId, send }) {
         </div>
       )}
 
+      {milieu.summary && (
+        <div className="card">
+          <h2>Milieu — what the subject volunteers</h2>
+          <p>{milieu.summary}</p>
+          {known(milieu.origin) && <Axis label="Social origin" value={milieu.origin} />}
+          {known(milieu.education) && <Axis label="Education" value={milieu.education} />}
+          {known(milieu.occupation) && <Axis label="Occupation" value={milieu.occupation} />}
+          {known(milieu.household) && <Axis label="Household" value={milieu.household} />}
+          {known(milieu.generation) && <Axis label="Generation" value={milieu.generation} />}
+          {(milieu.evidence || []).filter((e) => e.quote || e.reads).map((e, i) => (
+            <div className="evidence" key={i}>
+              {e.quote && <div className="q">“{e.quote}”</div>}
+              {e.reads && <div className="subtle">{e.reads}</div>}
+            </div>
+          ))}
+          <p className="subtle" style={{ marginTop: 12 }}>
+            Only what the writer says about themselves, never inferred from their
+            opinions. Recorded categorically: the study keeps no name — of the
+            subject, a relative, an employer or a place.
+            {milieu.withheld && !/^nothing/i.test(milieu.withheld) &&
+              <> <strong>Set aside:</strong> {milieu.withheld}</>}
+          </p>
+        </div>
+      )}
+
       {p.notes && <div className="card"><h2>Notes</h2><p>{p.notes}</p></div>}
     </>
   )
 }
+
+// 'unknown' is the profiling contract's way of saying the dossier was silent;
+// showing it as a value would read as a finding.
+function known(v) { return v && v !== 'unknown' }
 
 function conf(c) {
   return c == null ? null : `confidence ${Math.round(c * 100)}%`

@@ -9,7 +9,7 @@ Two kinds of output are kept strictly apart:
 
   metrics  — computed here, deterministic and reproducible (counts, rates,
              rhythm of activity). These are measurements.
-  language / gender / politics / philosophy / region / topics
+  language / gender / politics / philosophy / region / topics / milieu
            — inferred by an LLM from the dossier, always with probabilities and
              supporting quotes. These are estimates.
 
@@ -464,8 +464,8 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                 INSERT INTO author_profile
                     (community, subject_kind, subject_key, label, n_comments, n_chars,
                      first_seen, last_seen, metrics, language, gender, politics,
-                     philosophy, region, topics, notes, model, computed_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                     philosophy, region, topics, milieu, notes, model, computed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                 ON CONFLICT (community, subject_kind, subject_key) DO UPDATE SET
                     label=EXCLUDED.label, n_comments=EXCLUDED.n_comments,
                     n_chars=EXCLUDED.n_chars, first_seen=EXCLUDED.first_seen,
@@ -473,6 +473,7 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                     language=EXCLUDED.language, gender=EXCLUDED.gender,
                     politics=EXCLUDED.politics, philosophy=EXCLUDED.philosophy,
                     region=EXCLUDED.region, topics=EXCLUDED.topics,
+                    milieu=EXCLUDED.milieu,
                     notes=EXCLUDED.notes, model=EXCLUDED.model, computed_at=now()
             """, (
                 # Profiles written before communities existed were all Le Matin,
@@ -484,7 +485,8 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                 db._jsonb(meta["metrics"]), db._jsonb(p.get("language")),
                 db._jsonb(p.get("gender")), db._jsonb(p.get("politics")),
                 db._jsonb(p.get("philosophy")), db._jsonb(p.get("region")),
-                db._jsonb(p.get("topics")), p.get("notes"), rec.get("model"),
+                db._jsonb(p.get("topics")), db._jsonb(p.get("milieu")),
+                p.get("notes"), rec.get("model"),
             ))
         n += 1
     if missing:

@@ -324,6 +324,13 @@ UPDATE journal SET community = slug WHERE community IS NULL;
 -- Profiles and persona clusters are scoped the same way. Everything profiled
 -- before this column existed was Le Matin: it was the only journal with data.
 ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
+
+-- What a commenter volunteers about the environment they formed in: social
+-- origin, schooling, trade, household, generation. Kept because it is usually
+-- what explains how someone came to think as they do, and kept categorically —
+-- the profiling contract forbids a name of any kind, so nothing here locates a
+-- person even though it describes one.
+ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS milieu JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE persona ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
 
 -- persona_alias already scoped by journal, but '*' (every journal) is the wrong
