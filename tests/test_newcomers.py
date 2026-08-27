@@ -129,6 +129,18 @@ def test_a_silence_before_the_crawl_is_labelled_as_ours():
     assert [c["b"]["key"] for c in only] == ["watched"]
 
 
+def test_the_comparison_gate_is_text_not_comment_count():
+    # Fifty one-word comments carry less style than three long ones, and the
+    # measured reliability curve is in characters, so the gate is too. A gate
+    # on comment count would have admitted the chatterer and refused the essay.
+    chatty, essayist = 200, 5_000            # 50 four-letter posts vs 3 long ones
+    assert nc.rateable(chatty) == (False, True)
+    assert nc.rateable(essayist) == (True, False)
+    assert nc.rateable(None) == (False, True)          # nothing written
+    assert nc.rateable(1_500) == (True, True)          # ranked, but weak
+    assert nc.MIN_CHARS_FOR_COMPARISON < nc.THIN_CHARS
+
+
 def test_lift_is_silent_on_a_small_field_and_flat_on_a_flat_one():
     assert nc._lift([{"score": 0.9}] * 5)["lift"] is None      # too few to divide by
     assert nc._lift([{"score": 0.5}] * 30)["lift"] is None     # no spread at all

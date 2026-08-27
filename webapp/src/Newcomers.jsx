@@ -99,7 +99,8 @@ function CoverageNote({ d }) {
         <strong>{d.total_arrivals} arrivals since {fmtDay(d.since)}</strong>
         <span className="subtle">
           out of {d.subjects} profiles the corpus can place in time; below{' '}
-          {d.min_for_comparison} comments no predecessor is ranked at all.
+          {d.min_chars.toLocaleString()} characters written no predecessor is ranked
+          at all, and below {d.thin_chars.toLocaleString()} the ranking is weak.
         </span>
       </div>
       <p className="subtle" style={{ margin: '8px 0 0' }}>
@@ -177,16 +178,20 @@ function ArrivalTable({ d, open, onOpen }) {
     <div className="table-wrap"><table>
       <thead><tr>
         <th>Profile</th><th>Debut</th><th className="num">Comments</th>
+        <th className="num">Characters</th>
         <th className="num">Days active</th><th>Daily</th><th>Absent from</th>
       </tr></thead>
       <tbody>
         {d.arrivals.map((a) => (
           <tr key={a.key} className={'rowlink' + (open?.key === a.key ? ' on' : '')}
             onClick={() => onOpen(a)}>
-            <td>{a.label}{!a.comparable &&
-              <span className="subtle"> · too few to compare</span>}</td>
+            <td>{a.label}
+              {!a.comparable
+                ? <span className="subtle"> · too little text to compare</span>
+                : a.thin && <span className="subtle"> · thin</span>}</td>
             <td>{fmtDay(a.debut)}</td>
             <td className="num">{a.n_comments}</td>
+            <td className="num subtle">{a.n_chars.toLocaleString()}</td>
             <td className="num subtle">{a.active_days}</td>
             <td>
               <span className="spark">
@@ -240,8 +245,8 @@ function Predecessors({ send, community, arrival, minComments, onNick }) {
   if (!res) return <div className="card"><div className="empty">Comparing…</div></div>
   if (!res.subject) {
     return <div className="card"><h2>{arrival.label}</h2>
-      <p className="subtle">{arrival.n_comments} comments is too little for the style
-        measures to say anything; no predecessor is ranked.</p></div>
+      <p className="subtle">{arrival.n_chars.toLocaleString()} characters is too little
+        for the style measures to say anything; no predecessor is ranked.</p></div>
   }
 
   return (
@@ -251,6 +256,7 @@ function Predecessors({ send, community, arrival, minComments, onNick }) {
         <Metric k="Candidates" v={res.field} />
         <Metric k="Watched stop" v={res.observed_field} />
         <Metric k="Top beats the field by" v={res.lift == null ? '—' : `${res.lift} SD`} />
+        <Metric k="Text to judge on" v={`${res.n_chars.toLocaleString()} ch`} />
         <Metric k={res.excess > 0 ? 'Above coincidence' : 'Below coincidence'}
           hi={res.excess > 0}
           v={res.excess == null ? '—' : `${res.excess > 0 ? '+' : ''}${res.excess} SD`} />
@@ -268,6 +274,16 @@ function Predecessors({ send, community, arrival, minComments, onNick }) {
               ? ' This match is doing no better than a coincidence, and should be read as one.'
               : ' That is a real margin over chance, which makes it worth a look — not a verdict.'}
           </>}
+      </p>
+      <p className="subtle" style={{ margin: '8px 0 0' }}>
+        Style needs text, and {res.label || arrival.label} has written{' '}
+        {res.n_chars.toLocaleString()} characters. Measured by hiding part of a
+        well-documented commenter&apos;s output and asking the rest to find it again
+        over this population: at 1&nbsp;300 characters the true match lands top-1 13% of
+        the time and top-5 41%; at 3&nbsp;000, 51% and 69%. And all of that assumes the
+        predecessor is in the corpus at all — with the score alone you cannot tell,
+        because the best match scores 0.68 when the true one is present and 0.66 when
+        it has been removed.
       </p>
       <p className="subtle" style={{ margin: '8px 0 0' }}>
         Only {res.observed_field} of the {res.field} were watched falling silent — the

@@ -35,10 +35,21 @@ from datetime import date, datetime, timedelta
 from . import profiling as pf
 from . import proximity as px
 
-# Below this the style measures are mostly sampling noise, and a proximity
-# built on noise ranks confidently and wrongly. Arrivals under it are still
-# listed — the arrival itself is a fact — but they get no predecessor search.
-MIN_FOR_COMPARISON = 5
+# What the style measures need is text, not comments — a floor on the comment
+# count was the wrong gate. Measured by hiding part of a well-documented
+# commenter's output and asking the remainder to find it again, over a field of
+# 744 Le Matin profiles:
+#
+#   1300 chars (~8 comments)   top-1 13%   top-5 41%   median rank 8
+#   3000 chars (~17 comments)  top-1 51%   top-5 69%   median rank 1
+#   6000 chars (~26 comments)  top-1 53%   top-5 77%   median rank 1
+#
+# So a thousand characters is about where a ranking starts to beat guessing,
+# and three thousand is where it becomes worth reading. Arrivals under the
+# floor are still listed — the arrival itself is a fact — but get no
+# predecessor search.
+MIN_CHARS_FOR_COMPARISON = 1000
+THIN_CHARS = 3000            # ranked, but the ranking is weak; say so
 
 # A day counts as covered when it carries a real share of the recent daily
 # volume. Anything thinner is a gap in the crawl, not a quiet day on the site,
@@ -48,6 +59,12 @@ DENSE_FRACTION = 0.2
 
 def _day(ts: datetime) -> date:
     return ts.astimezone(pf.CH).date()
+
+
+def rateable(n_chars: int | None) -> tuple[bool, bool]:
+    """(worth ranking at all, but thin) for a subject of this much text."""
+    n = n_chars or 0
+    return n >= MIN_CHARS_FOR_COMPARISON, n < THIN_CHARS
 
 
 # --------------------------------------------------------------------------- #
@@ -211,14 +228,16 @@ def overview(conn, *, community: str = "lematin", since: str | None = None,
             "last": _day(r["last_seen"]).isoformat(),
             "active_days": len(r["daily"]),
             "daily": [r["daily"].get(date.fromisoformat(d), 0) for d in days],
-            "comparable": r["n_comments"] >= MIN_FOR_COMPARISON,
+            "comparable": rateable(r["n_chars"])[0],
+            "thin": rateable(r["n_chars"])[1],
             **ev,
         })
 
     return {"community": community, "since": cut.isoformat(),
             "days": days, "series": series, "coverage": cov,
             "arrivals": out[:limit], "total_arrivals": len(out),
-            "subjects": len(rows), "min_for_comparison": MIN_FOR_COMPARISON}
+            "subjects": len(rows), "min_chars": MIN_CHARS_FOR_COMPARISON,
+            "thin_chars": THIN_CHARS}
 
 
 # --------------------------------------------------------------------------- #
@@ -320,4 +339,6 @@ def predecessors(conn, *, community: str, kind: str, key: str,
             **_lift(scored), "min_gap_days": min_gap_days,
             "observed_only": observed_only,
             "dense_from": cov["dense_from"], "dense_days": cov.get("dense_days"),
-            "comparable": me["subject"]["n_comments"] >= MIN_FOR_COMPARISON}
+            "n_chars": me["subject"]["n_chars"],
+            "comparable": rateable(me["subject"]["n_chars"])[0],
+            "thin": rateable(me["subject"]["n_chars"])[1]}
