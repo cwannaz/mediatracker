@@ -35,6 +35,32 @@ comment fetches — and only those — pass `force_allow=True` to bypass the rob
 check; the per-host politeness delay still applies. Everything else stays fully
 robots-compliant. If this posture changes, unset it in `tamedia.fetch_comments`.
 
+### Two readings of a writer, never blended (measured 2026-08-27)
+
+`proximity` scores a writer as thirteen aggregate rates. `lexicon` scores the
+character 4-grams they repeat. Held out by time over 744 Le Matin profiles, a
+probe of 1300 characters finds its own author at the top of the list:
+
+| reading | top-1 | top-5 | median rank |
+|---|---|---|---|
+| aggregate rates | 8% | 46% | 8 |
+| rare words, idf-weighted | 40% | 60% | 4 |
+| **character 4-grams** | **49%** | **71%** | **2** |
+| turns of phrase (2-3 words) | 17% | 37% | 12 |
+
+Both are reported, neither is blended into the other: no weighting this corpus
+can justify exists, and an unjustified one would read as precision. Two
+artefacts are removed inside `lexicon` rather than left to callers — @mentions
+and URLs (the strongest match ever produced rested entirely on fragments of a
+third party's handle both had replied to) and document size (uncapped, the
+longest profile headed the ranking for five unrelated probes out of five).
+
+Neither reading can say the true author is present at all: best score 0.175
+with them in the population, 0.154 with them removed. Every ranking therefore
+reports `standout` — how far its top sits above what the best of a field that
+size is worth by chance, which is sqrt(2 ln n), near 3.6 for seven hundred.
+Quote the excess, never the raw score.
+
 ### No headless browser (measured 2026-08-27)
 
 Le Matin renders its comment list client-side, so `www.lematin.ch/comment/<id>`

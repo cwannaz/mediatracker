@@ -11,7 +11,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 // Nothing here concludes anything. It produces a shortlist for a human.
 
 const SORTS = [
-  { id: 'score', label: 'Similarity' },
+  { id: 'lexical', label: 'Wording' },
+  { id: 'score', label: 'Rates' },
   { id: 'rhythm', label: 'Rhythm' },
   { id: 'gap', label: 'Shortest gap' },
 ]
@@ -26,7 +27,7 @@ export default function Proximity({ send }) {
   const [community, setCommunity] = useState('lematin')
   const [minComments, setMinComments] = useState(8)
   const [successionOnly, setSuccessionOnly] = useState(false)
-  const [sort, setSort] = useState('score')
+  const [sort, setSort] = useState('lexical')
   const [data, setData] = useState(null)
   const [calib, setCalib] = useState(null)
   const [err, setErr] = useState(null)
@@ -98,7 +99,7 @@ export default function Proximity({ send }) {
           <div className="table-wrap"><table>
             <thead><tr>
               <th>Subject</th><th>Subject</th>
-              <th className="num">Similarity</th><th className="num">Apart</th>
+              <th className="num">Wording</th><th className="num">Rates</th>
               <th className="num">Rhythm</th><th className="num">Overlap / gap</th>
               <th className="num">Comments</th>
             </tr></thead>
@@ -108,8 +109,11 @@ export default function Proximity({ send }) {
                   onClick={() => select(p)}>
                   <td>{p.a.label}</td>
                   <td>{p.b.label}</td>
-                  <td className="num"><Bar v={p.score} /></td>
-                  <td className="num subtle">{p.distance} SD</td>
+                  <td className="num">
+                    {p.lexical == null ? '—'
+                      : <Bar v={p.lexical * 3} label={p.lexical.toFixed(4)} />}
+                  </td>
+                  <td className="num subtle">{p.style.toFixed(3)}</td>
                   <td className="num">{p.rhythm == null ? '—' : p.rhythm.toFixed(2)}</td>
                   <td className="num">
                     {p.gap_days != null
@@ -154,6 +158,11 @@ function Calibration({ calib }) {
         separates them. Read this as a shortlist to look at, never as a verdict.
         {s.rhythm?.auc != null && <> Rhythm alone scores {s.rhythm.auc.toFixed(2)} and blending it
         into the ranking made the separation worse, so it is shown but not used to sort.</>}
+        {' '}That AUC describes the <em>rates</em> column. <strong>Wording</strong> beside it
+        is the newer and, on short samples, much stronger reading — shared character
+        sequences rather than averages: over 744 profiles a probe of 1&nbsp;300 characters
+        finds its own author top of the list 49% of the time by wording against 8% by
+        rates. It is not folded into this AUC, which was measured before it existed.
         {calib.same_pairs < 40 && <> With {calib.same_pairs} same-person pairs the error bar on
         that figure is wide — confirming more people in the People tab is what narrows it.</>}
       </p>
@@ -166,7 +175,8 @@ function PairDetail({ pair, timeline }) {
     <div className="card">
       <h2>{pair.a.label} &nbsp;~&nbsp; {pair.b.label}</h2>
       <div className="metrics">
-        <Metric k="Similarity" v={pair.score.toFixed(3)} />
+        <Metric k="Wording" v={pair.lexical == null ? '—' : pair.lexical.toFixed(4)} />
+        <Metric k="Rates" v={pair.style.toFixed(3)} />
         <Metric k="Distance" v={`${pair.distance} SD`} />
         <Metric k="Rhythm" v={pair.rhythm == null ? '—' : pair.rhythm.toFixed(3)} />
         <Metric k={pair.gap_days != null ? 'Gap between them' : 'Active together'}
@@ -229,11 +239,11 @@ function CommonTimeline({ tl }) {
   )
 }
 
-function Bar({ v }) {
+function Bar({ v, label }) {
   return (
     <span className="scorecell">
       <span className="scorebar" style={{ width: `${Math.min(100, v * 100)}%` }} />
-      <span className="scoretext">{v.toFixed(3)}</span>
+      <span className="scoretext">{label ?? v.toFixed(3)}</span>
     </span>
   )
 }

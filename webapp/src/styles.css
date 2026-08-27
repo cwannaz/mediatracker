@@ -383,3 +383,10 @@ tr.rowlink.on td { background: var(--surface-2); }
 .spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 20px; width: 90px; }
 .spark span { flex: 1 1 0; min-width: 1px; min-height: 1px;
   background: var(--accent); border-radius: 1px 1px 0 0; }
+
+/* The character sequences a lexical match rests on. Shown on every row rather
+   than behind a click: the strongest match the method ever produced was an
+   artefact, and it was visible the moment these were printed. */
+.drivers { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.drivers code { font-size: 10.5px; padding: 1px 4px; border-radius: 3px;
+  background: var(--surface-3); color: var(--muted); white-space: pre; }

@@ -28,6 +28,8 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
+from . import lexicon as lx
+
 # Scale-free style measures. Volume itself is excluded on purpose: a pair of
 # prolific writers must not look alike merely for being prolific.
 FEATURES = (
@@ -253,6 +255,10 @@ def pairs(conn, *, community: str | None = None, min_comments: int = 5,
     built = build_space(subjects)
     space = built["space"]
     keys = list(space)
+    # The second, independent reading of the same pair. Measured on this corpus
+    # it separates writers far better than the rates do on a short sample, but
+    # it fails differently, so both are reported and neither is blended away.
+    index = lx.load(conn, community=community, min_comments=min_comments)
 
     out = []
     for i in range(len(keys)):
@@ -269,11 +275,13 @@ def pairs(conn, *, community: str | None = None, min_comments: int = 5,
             a, b = xi["subject"], yj["subject"]
             out.append({
                 **c,
+                "lexical": round(index.similarity(keys[i], keys[j]), 4),
                 "a": _brief(a), "b": _brief(b),
                 "same_community": a["community"] == b["community"],
             })
 
     key = {"score": lambda p: -p["score"],
+           "lexical": lambda p: -(p.get("lexical") or 0),
            "style": lambda p: -p["style"],
            "rhythm": lambda p: -(p["rhythm"] or 0),
            "gap": lambda p: (p["gap_days"] if p["gap_days"] is not None else 1e9),
@@ -295,19 +303,30 @@ def neighbours(conn, *, kind: str, key: str, community: str | None = None,
     """The subjects closest to one given subject."""
     subjects = load_subjects(conn, community=community, min_comments=min_comments)
     space = build_space(subjects)["space"]
-    me = next((v for k, v in space.items() if k[1] == kind and k[2] == key
-               and (community is None or k[0] == community)), None)
-    if me is None:
-        return {"subject": None, "neighbours": []}
+    mine = next((k for k in space if k[1] == kind and k[2] == key
+                 and (community is None or k[0] == community)), None)
+    if mine is None:
+        # Same shape either way: a caller reading the standout figures should
+        # not have to branch on whether the subject was found.
+        return {"subject": None, "neighbours": [],
+                "lexical_standout": lx.standout([]),
+                "style_standout": lx.standout([])}
+    me = space[mine]
+    index = lx.load(conn, community=community, min_comments=min_comments)
     out = []
     for k, other in space.items():
         if other is me:
             continue
         c = compare(me, other)
         if c:
-            out.append({**c, "b": _brief(other["subject"])})
+            out.append({**c, "lexical": round(index.similarity(mine, k), 4),
+                        "drivers": index.drivers(mine, k),
+                        "b_chars": index.chars(k),
+                        "b": _brief(other["subject"])})
     out.sort(key=lambda p: -p["score"])
-    return {"subject": _brief(me["subject"]), "neighbours": out[:limit]}
+    return {"subject": _brief(me["subject"]), "neighbours": out[:limit],
+            "lexical_standout": lx.standout([p["lexical"] for p in out]),
+            "style_standout": lx.standout([p["score"] for p in out])}
 
 
 def timeline(conn, subjects: list[dict], *, bucket: str = "month") -> dict:

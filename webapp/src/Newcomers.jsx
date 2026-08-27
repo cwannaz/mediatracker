@@ -257,33 +257,33 @@ function Predecessors({ send, community, arrival, minComments, onNick }) {
         <Metric k="Watched stop" v={res.observed_field} />
         <Metric k="Top beats the field by" v={res.lift == null ? '—' : `${res.lift} SD`} />
         <Metric k="Text to judge on" v={`${res.n_chars.toLocaleString()} ch`} />
-        <Metric k={res.excess > 0 ? 'Above coincidence' : 'Below coincidence'}
-          hi={res.excess > 0}
-          v={res.excess == null ? '—' : `${res.excess > 0 ? '+' : ''}${res.excess} SD`} />
+        <Metric k="Wording vs coincidence" hi={res.lexical_standout?.excess > 0}
+          v={fmtSD(res.lexical_standout?.excess)} />
+        <Metric k="Rates vs coincidence" hi={res.style_standout?.excess > 0}
+          v={fmtSD(res.style_standout?.excess)} />
       </div>
 
       <p className="subtle" style={{ margin: '10px 0 0' }}>
-        {res.field} accounts had gone quiet before {arrival.label} started.
-        {res.lift == null
-          ? ' The field is too small to say whether the closest of them stands out.'
-          : <> The closest writer among them beats that field by {res.lift} standard
-            deviations — but the best of {res.field} draws sits about {res.chance} SD
-            above the mean by chance alone, with no signal present at all. The number
-            that means something is the difference: {res.excess > 0 ? '+' : ''}{res.excess} SD.
-            {res.excess <= 0
-              ? ' This match is doing no better than a coincidence, and should be read as one.'
-              : ' That is a real margin over chance, which makes it worth a look — not a verdict.'}
-          </>}
+        {res.field} accounts had gone quiet before {arrival.label} started, and each is
+        read twice. <strong>Wording</strong> compares the character sequences the two
+        actually repeat — a contraction, a slang turn, a habitual misspelling, a space
+        before a colon. <strong>Rates</strong> is the older reading: thirteen averages
+        such as word length and punctuation per comment. On a short sample the first is
+        far the stronger — held out by time over this population, a probe of 1&nbsp;300
+        characters finds its own author top of {res.field > 0 ? '744' : '744'} profiles
+        49% of the time by wording against 8% by rates — but the two fail differently,
+        so a pair they agree on is worth more than either says alone. They are not
+        blended: no weighting this corpus can justify exists yet.
       </p>
       <p className="subtle" style={{ margin: '8px 0 0' }}>
-        Style needs text, and {res.label || arrival.label} has written{' '}
-        {res.n_chars.toLocaleString()} characters. Measured by hiding part of a
-        well-documented commenter&apos;s output and asking the rest to find it again
-        over this population: at 1&nbsp;300 characters the true match lands top-1 13% of
-        the time and top-5 41%; at 3&nbsp;000, 51% and 69%. And all of that assumes the
-        predecessor is in the corpus at all — with the score alone you cannot tell,
-        because the best match scores 0.68 when the true one is present and 0.66 when
-        it has been removed.
+        Both figures above are excesses over coincidence. The best of {res.field} draws
+        already sits about {res.lexical_standout?.chance ?? '—'} standard deviations
+        above the mean with no signal present at all, so only the surplus counts, and a
+        negative one means the top match is doing worse than chance. Read the n-grams
+        under each row before believing any of it: the strongest match this ever
+        produced turned out to rest entirely on fragments of a third party&apos;s
+        handle that both had replied to, which is why mentions and links are now
+        stripped before anything is counted.
       </p>
       <p className="subtle" style={{ margin: '8px 0 0' }}>
         Only {res.observed_field} of the {res.field} were watched falling silent — the
@@ -295,7 +295,6 @@ function Predecessors({ send, community, arrival, minComments, onNick }) {
         a new account, a renamed one, or the same person spelling their handle
         differently.
       </p>
-
       <div className="toolbar" style={{ marginTop: 10 }}>
         <label className="filter">
           <input type="checkbox" checked={observedOnly}
@@ -307,19 +306,28 @@ function Predecessors({ send, community, arrival, minComments, onNick }) {
       {!res.candidates.length ? <div className="empty">No candidate under this filter.</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>Candidate</th><th className="num">Similarity</th>
-            <th className="num">Apart</th><th className="num">Silent for</th>
-            <th className="num">Comments</th><th>Disappearance</th>
+            <th>Candidate</th><th className="num">Wording</th>
+            <th className="num">Rates</th><th className="num">Silent for</th>
+            <th className="num">Their text</th><th>Disappearance</th>
           </tr></thead>
           <tbody>
             {res.candidates.map((c, i) => (
               <tr key={i} className={'rowlink' + (pick === c ? ' on' : '')}
                 onClick={() => choose(c)}>
-                <td>{c.b.label}</td>
-                <td className="num"><Bar v={c.score} /></td>
-                <td className="num subtle">{c.distance} SD</td>
+                <td>
+                  {c.b.label}
+                  {c.drivers?.length > 0 && (
+                    <div className="drivers">
+                      {c.drivers.slice(0, 8).map((g, j) => (
+                        <code key={j}>{g.replace(/ /g, '␣')}</code>
+                      ))}
+                    </div>
+                  )}
+                </td>
+                <td className="num">{c.lexical == null ? '—' : <Bar v={c.lexical * 3} label={c.lexical.toFixed(4)} />}</td>
+                <td className="num subtle">{c.style == null ? '—' : c.style.toFixed(3)}</td>
                 <td className="num">{fmtQuiet(c.quiet_days)}</td>
-                <td className="num subtle">{c.b.n_comments}</td>
+                <td className="num subtle">{(c.b_chars ?? 0).toLocaleString()} ch</td>
                 <td className={c.disappearance === 'observed' ? '' : 'subtle'}>
                   {c.disappearance === 'observed' ? 'watched' : 'before we watched'}
                 </td>
@@ -390,14 +398,19 @@ function Weekly({ tl }) {
   )
 }
 
-function Bar({ v }) {
+// `v` is the bar's fill, `label` what to print — the two differ for the wording
+// score, whose useful range is a fraction of 0..1 and would otherwise draw as a
+// stub on every row.
+function Bar({ v, label }) {
   return (
     <span className="scorecell">
       <span className="scorebar" style={{ width: `${Math.min(100, v * 100)}%` }} />
-      <span className="scoretext">{v.toFixed(3)}</span>
+      <span className="scoretext">{label ?? v.toFixed(3)}</span>
     </span>
   )
 }
+
+const fmtSD = (x) => (x == null ? '—' : `${x > 0 ? '+' : ''}${x} SD`)
 
 function Metric({ k, v, hi }) {
   return (

@@ -267,6 +267,7 @@ class Server:
                 min_gap_days=float(msg.get("min_gap_days") or 0.5),
                 min_comments=int(msg.get("min_comments") or 3),
                 observed_only=bool(msg.get("observed_only")),
+                sort=msg.get("sort") or "lexical",
                 limit=min(int(msg.get("limit") or 12), 100)))
         if cmd == "proximity_calibration":
             return ok(cmd, **proximity.calibrate(

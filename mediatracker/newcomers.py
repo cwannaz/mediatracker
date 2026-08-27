@@ -32,6 +32,7 @@ import statistics
 from collections import Counter
 from datetime import date, datetime, timedelta
 
+from . import lexicon as lx
 from . import profiling as pf
 from . import proximity as px
 
@@ -48,8 +49,8 @@ from . import proximity as px
 # and three thousand is where it becomes worth reading. Arrivals under the
 # floor are still listed — the arrival itself is a fact — but get no
 # predecessor search.
-MIN_CHARS_FOR_COMPARISON = 1000
-THIN_CHARS = 3000            # ranked, but the ranking is weak; say so
+MIN_CHARS_FOR_COMPARISON = lx.MIN_CHARS
+THIN_CHARS = lx.TAIL_CHARS   # ranked below this, but weakly; say so
 
 # A day counts as covered when it carries a real share of the recent daily
 # volume. Anything thinner is a gap in the crawl, not a quiet day on the site,
@@ -106,9 +107,15 @@ def build(conn, *, community: str, min_comments: int = 3) -> dict:
             "n_comments": m["n_comments"], "n_chars": m["n_chars"],
             "first_seen": min(stamps), "last_seen": max(stamps),
             "metrics": m, "daily": Counter(_day(t) for t in stamps),
+            # The recent tail, normalised once here: the row is what both the
+            # rate space and the n-gram index are built from, so neither can
+            # end up reading a different version of the same writer.
+            "text": lx.tail(s["comments"]),
         })
 
-    value = {"rows": rows, "space": px.build_space(rows)["space"]}
+    value = {"rows": rows, "space": px.build_space(rows)["space"],
+             "lexicon": lx.load(conn, community=community,
+                                min_comments=min_comments)}
     _CACHE.clear()
     _CACHE.update(key=key, value=value)
     return value
@@ -244,14 +251,29 @@ def overview(conn, *, community: str = "lematin", since: str | None = None,
 # Who they might have been
 # --------------------------------------------------------------------------- #
 
-def rank(space: dict, me: dict, *, cut: datetime,
-         dense_from: date | None, observed_only: bool = False) -> list[dict]:
+def rank(space: dict, me: dict, *, cut: datetime, dense_from: date | None,
+         observed_only: bool = False, index: "lx.Index | None" = None,
+         sort: str = "lexical") -> list[dict]:
     """Score every account that had gone quiet by `cut`, closest first.
 
-    Split out from `predecessors` because this is the part with the argument
-    in it: which accounts are eligible at all, and whether we watched each one
+    Two independent readings of the same pair, deliberately not merged:
+
+      * **lexical** — shared character n-grams, from `lexicon`. The stronger of
+        the two on short samples by a wide margin, and the default order.
+      * **style** — the thirteen aggregate rates from `proximity`. Slower to
+        become useful, but it fails differently, so a pair the two agree on is
+        worth more than either says alone.
+
+    Blending them into one number was not attempted here for the same reason
+    rhythm is not blended into `proximity`: there is no weighting this corpus
+    can justify yet, and an unjustified one would read as precision.
+
+    Split out from `predecessors` because this is the part with the argument in
+    it — which accounts are eligible at all, and whether we watched each one
     stop. The database only decides who is in the room.
     """
+    mine = (me["subject"]["community"], me["subject"]["subject_kind"],
+            me["subject"]["subject_key"])
     scored = []
     for other in space.values():
         if other is me:
@@ -263,47 +285,43 @@ def rank(space: dict, me: dict, *, cut: datetime,
         if observed_only and not seen_stop:
             continue
         c = px.compare(me, other)
-        if c is None:
+        theirs = (ob["community"], ob["subject_kind"], ob["subject_key"])
+        lexical = index.similarity(mine, theirs) if index else None
+        if c is None and lexical is None:
             continue
         quiet = (me["subject"]["first_seen"] - ob["last_seen"]).total_seconds() / 86400
-        scored.append({**c, "b": px._brief(ob),
-                       "disappearance": "observed" if seen_stop else "unobserved",
-                       "quiet_days": round(quiet, 1)})
+        scored.append({
+            **(c or {"score": 0.0}),
+            "style": None if c is None else c["score"],
+            "lexical": None if lexical is None else round(lexical, 4),
+            "drivers": index.drivers(mine, theirs) if index else [],
+            # Both sides' text volume travels with the match: a candidate
+            # sitting at the cap overlaps more of the n-gram space than a short
+            # one, and a hub has to be visible as a hub.
+            "b_chars": index.chars(theirs) if index else None,
+            "b": px._brief(ob),
+            "disappearance": "observed" if seen_stop else "unobserved",
+            "quiet_days": round(quiet, 1),
+        })
+
+    # `score` is whichever signal the caller is ranking on, so the standout
+    # figure downstream is computed over the field that produced the order.
+    field = "lexical" if sort == "lexical" and index is not None else "style"
+    for c in scored:
+        c["score"] = c[field] if c[field] is not None else 0.0
     scored.sort(key=lambda c: -c["score"])
     return scored
 
 
 def _lift(scored: list[dict]) -> dict:
-    """How far the top candidate stands above the field it beat, in SD, and
-    how far the best of a field that size stands above it by chance alone.
-
-    A score is only worth reading against the field it won. The same 0.70 means
-    one thing when the runners-up sit at 0.45 and nothing at all when they sit
-    at 0.69. But the lift on its own is still misleading, because the maximum
-    of many draws is high by construction: over n samples of almost any
-    well-behaved distribution the largest sits roughly sqrt(2 ln n) standard
-    deviations above the mean with no signal present at all — about 3.5 SD for
-    a field of four hundred. So the number to read is the excess over that, and
-    a negative excess means the best match is doing worse than a coincidence.
-
-    Below a field of 20 the spread is itself too noisy to divide by, so no
-    figure is offered rather than a bad one.
-    """
-    if len(scored) < 20:
-        return {"lift": None, "chance": None, "excess": None}
-    field = [c["score"] for c in scored]
-    sd = statistics.pstdev(field)
-    if sd <= 0:
-        return {"lift": None, "chance": None, "excess": None}
-    lift = (scored[0]["score"] - statistics.fmean(field)) / sd
-    chance = math.sqrt(2 * math.log(len(field)))
-    return {"lift": round(lift, 2), "chance": round(chance, 2),
-            "excess": round(lift - chance, 2)}
+    """`lexicon.standout` over a list of scored candidates."""
+    return lx.standout([c["score"] for c in scored])
 
 
 def predecessors(conn, *, community: str, kind: str, key: str,
                  min_gap_days: float = 0.5, min_comments: int = 3,
-                 observed_only: bool = False, limit: int = 12) -> dict:
+                 observed_only: bool = False, sort: str = "lexical",
+                 limit: int = 12) -> dict:
     """Accounts that had already gone quiet, ranked by how alike they write.
 
     Only accounts whose last comment precedes the arrival's first by at least
@@ -330,13 +348,22 @@ def predecessors(conn, *, community: str, kind: str, key: str,
     debut = me["subject"]["first_seen"]
     cut = debut - timedelta(days=min_gap_days)
 
+    index = built["lexicon"]
     scored = rank(space, me, cut=cut, dense_from=dense_from,
-                  observed_only=observed_only)
+                  observed_only=observed_only, index=index, sort=sort)
 
+    # Both fields get a standout figure, because "is this above coincidence"
+    # has to be answered per signal — a pair can stand out lexically and be
+    # unremarkable on the rates, and that disagreement is information.
     return {"subject": px._brief(me["subject"]),
             "candidates": scored[:limit], "field": len(scored),
             "observed_field": sum(1 for c in scored if c["disappearance"] == "observed"),
-            **_lift(scored), "min_gap_days": min_gap_days,
+            **_lift(scored), "sort": sort,
+            "lexical_standout": lx.standout([c["lexical"] for c in scored
+                                             if c["lexical"] is not None]),
+            "style_standout": lx.standout([c["style"] for c in scored
+                                           if c["style"] is not None]),
+            "min_gap_days": min_gap_days,
             "observed_only": observed_only,
             "dense_from": cov["dense_from"], "dense_days": cov.get("dense_days"),
             "n_chars": me["subject"]["n_chars"],
