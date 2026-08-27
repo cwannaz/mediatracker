@@ -35,6 +35,26 @@ comment fetches — and only those — pass `force_allow=True` to bypass the rob
 check; the per-host politeness delay still applies. Everything else stays fully
 robots-compliant. If this posture changes, unset it in `tamedia.fetch_comments`.
 
+### No headless browser (measured 2026-08-27)
+
+Le Matin renders its comment list client-side, so `www.lematin.ch/comment/<id>`
+returns a page with a comment count and no comments — not one nickname from a
+150-comment thread appears in the 126 KB the server sends. Driving a real
+browser was benchmarked against the plain-HTTP route on the same articles:
+
+| | requests | transferred | wall | comments |
+|---|---|---|---|---|
+| HTTP (what we do) | 3 | 242 KiB | 3.2 s | 149 of 150 |
+| Headless Chrome | 96 | 7,073 KiB | 7–10 s | 10 of 150 |
+
+The browser makes the *same* API call we do — captured verbatim as
+`api.lematin.ch/comment/v1/comments?tenantId=4&contentId=…&limit=10` — with a
+page size of 10 against our 100, then needs a click per further ten behind a
+consent overlay. It is thirty times the traffic to obtain a fifteenth of the
+data per request, and offers no field the API lacks, because the DOM it builds
+is built from that JSON. The dependency is available on this machine and was
+tested; it is not used.
+
 ## Layout
 
 - One lowercase package (`mediatracker/`) inside the repo root, with
