@@ -16,7 +16,8 @@ import logging
 
 import websockets
 
-from . import alias_candidates, blobserver, db, ids, newcomers, proximity, sources
+from . import (alias_candidates, blobserver, db, ids, newcomers, nicknames,
+               proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -273,8 +274,10 @@ class Server:
             return ok(cmd, **proximity.calibrate(
                 self.conn, min_comments=int(msg.get("min_comments") or 8)))
         if cmd == "browse_commenters":
-            return ok(cmd, commenters=db.browse_commenters(
-                self.conn, q=q, limit=limit, offset=offset))
+            rows = db.browse_commenters(self.conn, q=q, limit=limit, offset=offset)
+            return ok(cmd, commenters=nicknames.annotate(rows),
+                      reference_coverage=nicknames.coverage(
+                          r["nick"] for r in rows))
         if cmd == "get_commenter":
             return ok(cmd, **db.get_commenter(self.conn, msg["nick"], limit=limit))
         if cmd == "browse_authors":
@@ -305,7 +308,10 @@ class Server:
                 self.conn, int(msg.get("min_comments", 2)), linked=linked)
             return ok(cmd, strong=strong, weak=weak, linked=sorted(linked))
         if cmd == "list_personas":
-            return ok(cmd, personas=db.list_personas(self.conn))
+            rows = db.list_personas(self.conn)
+            return ok(cmd, personas=nicknames.annotate(
+                rows, field="label", aliases="aliases"),
+                reference_coverage=nicknames.coverage(r["label"] for r in rows))
         if cmd == "get_persona":
             p = db.get_persona(self.conn, int(msg["persona_id"]), limit=limit or 3000)
             return ok(cmd, persona=p) if p else error(cmd, "persona not found")

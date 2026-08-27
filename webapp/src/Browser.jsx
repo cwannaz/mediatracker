@@ -137,6 +137,24 @@ export default function Browser({ connected, send, route, navigate, back }) {
   )
 }
 
+// What a handle is borrowed from. Blank is the honest majority state — the
+// lexicon behind this is hand-checked and reaches a small fraction of the
+// nicknames — so an empty cell means "not recognised", never "no reference".
+function Reference({ r }) {
+  if (!r) return <span className="subtle">—</span>
+  return (
+    <span className="ref" title={[r.note, r.via && `via ${r.via}`,
+      r.confidence !== 'high' && `${r.confidence} confidence`,
+      r.matched === 'stem' && 'matched without its trailing number']
+      .filter(Boolean).join(' · ')}>
+      <span className={'refdomain d-' + r.domain}>{r.domain}</span>
+      <span className="refwhat">{r.refers_to}</span>
+      {r.device !== 'borrowed' && <em className="refdevice">{r.device}</em>}
+      {r.confidence !== 'high' && <em className="refdevice">?</em>}
+    </span>
+  )
+}
+
 function useQuery(send, cmd, key, params = {}) {
   const [rows, setRows] = useState(null)
   const [err, setErr] = useState(null)
@@ -236,7 +254,7 @@ function ArticleList({ send, onOpen, days = 0, hidden = EMPTY, onToggleJournal }
 function CommenterList({ send, onOpen }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
-  const [rows, err] = useQuery(send, 'browse_commenters', 'commenters', { q: term || null, limit: 500 })
+  const [rows, err, resp] = useQuery(send, 'browse_commenters', 'commenters', { q: term || null, limit: 500 })
   return (
     <>
       <div className="toolbar">
@@ -246,16 +264,18 @@ function CommenterList({ send, onOpen }) {
         <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
       </div>
       {err && <div className="banner warn">{err}</div>}
+      <Coverage c={resp?.reference_coverage} />
       {!rows ? <div className="empty">Loading…</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>Nickname</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
+            <th>Nickname</th><th>Reference</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
             <th>First seen</th><th>Last seen</th><th className="num">Journals</th><th className="num">Votes</th>
           </tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.nick} className="rowlink" onClick={() => onOpen(c.nick)}>
                 <td><strong>{c.nick}</strong></td>
+                <td><Reference r={c.reference} /></td>
                 <td>{c.persona_label || <span className="subtle">—</span>}</td>
                 <td className="num">{c.comments}</td>
                 <td className="num">{c.articles}</td>
@@ -273,7 +293,7 @@ function CommenterList({ send, onOpen }) {
 }
 
 function PersonaList({ send, onOpen }) {
-  const [rows] = useQuery(send, 'list_personas', 'personas', {})
+  const [rows, , resp] = useQuery(send, 'list_personas', 'personas', {})
   if (!rows) return <div className="empty">Loading…</div>
   if (!rows.length) return (
     <div className="empty">
@@ -282,9 +302,11 @@ function PersonaList({ send, onOpen }) {
     </div>
   )
   return (
+    <>
+    <Coverage c={resp?.reference_coverage} />
     <div className="table-wrap"><table>
       <thead><tr>
-        <th>Person</th><th className="num">Aliases</th><th className="num">Comments</th>
+        <th>Person</th><th>Reference</th><th className="num">Aliases</th><th className="num">Comments</th>
         <th className="num">Articles</th><th>First seen</th><th>Last seen</th>
         <th className="num">Journals</th><th className="num">Votes</th>
       </tr></thead>
@@ -292,6 +314,7 @@ function PersonaList({ send, onOpen }) {
         <tr key={p.id} className="rowlink" onClick={() => onOpen(p.id)}>
           <td><strong>{p.label}</strong>
             <div className="subtle">{(p.aliases || []).join(', ')}</div></td>
+          <td><Reference r={p.reference} /></td>
           <td className="num">{p.n_aliases}</td>
           <td className="num">{p.comments}</td>
           <td className="num">{p.articles}</td>
@@ -302,6 +325,23 @@ function PersonaList({ send, onOpen }) {
         </tr>
       ))}</tbody>
     </table></div>
+    </>
+  )
+}
+
+// The lexicon is hand-built and covers a minority. Saying so beside the column
+// is what stops it reading as a survey of the commenting public's culture.
+function Coverage({ c }) {
+  if (!c || !c.total) return null
+  const top = Object.entries(c.domains || {}).slice(0, 5)
+  return (
+    <p className="subtle" style={{ margin: '0 0 10px' }}>
+      A handle recognised for {c.matched} of {c.total.toLocaleString()} rows
+      ({((c.matched / c.total) * 100).toFixed(1)}%). Blank means unrecognised,
+      not unreferenced — the readings are hand-checked, and a handle that merely
+      looks like an ordinary personal name is deliberately left alone.
+      {top.length > 0 && <> Most common: {top.map(([d, n]) => `${d} (${n})`).join(', ')}.</>}
+    </p>
   )
 }
 

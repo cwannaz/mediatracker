@@ -390,3 +390,13 @@ tr.rowlink.on td { background: var(--surface-2); }
 .drivers { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .drivers code { font-size: 10.5px; padding: 1px 4px; border-radius: 3px;
   background: var(--surface-3); color: var(--muted); white-space: pre; }
+
+/* ---- nickname references ---- */
+/* What a handle is borrowed from: the kind of culture, then the thing itself,
+   then how it is used when that is not simply "borrowed". */
+.ref { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.refdomain { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  padding: 1px 5px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
+.refwhat { font-size: 12.5px; }
+.refdevice { font-size: 10.5px; color: var(--brand-gold); font-style: normal; }
+.refdomain.d-politics, .refdomain.d-history { color: var(--brand-gold); }
