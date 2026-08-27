@@ -16,7 +16,7 @@ import logging
 
 import websockets
 
-from . import alias_candidates, blobserver, db, ids, proximity, sources
+from . import alias_candidates, blobserver, db, ids, newcomers, proximity, sources
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -142,7 +142,8 @@ class Server:
                      "get_profile", "profile_overview",
                      "findings_overview", "proximity_pairs",
                      "proximity_neighbours", "proximity_timeline",
-                     "proximity_calibration"):
+                     "proximity_calibration", "newcomers_overview",
+                     "newcomers_predecessors"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -245,6 +246,23 @@ class Server:
                 return error(cmd, "subjects must be a list")
             return ok(cmd, **proximity.timeline(
                 self.conn, subjects[:12], bucket=msg.get("bucket") or "month"))
+        # Arrivals are measured from the comments, not from author_profile:
+        # the accounts this answers about turned up after the last LLM pass and
+        # would not be in that table yet.
+        if cmd == "newcomers_overview":
+            return ok(cmd, **newcomers.overview(
+                self.conn, community=msg.get("community") or "lematin",
+                since=msg.get("since") or None,
+                min_comments=int(msg.get("min_comments") or 3),
+                limit=min(int(msg.get("limit") or 200), 1000)))
+        if cmd == "newcomers_predecessors":
+            return ok(cmd, **newcomers.predecessors(
+                self.conn, community=msg.get("community") or "lematin",
+                kind=msg["kind"], key=str(msg["key"]),
+                min_gap_days=float(msg.get("min_gap_days") or 0.5),
+                min_comments=int(msg.get("min_comments") or 3),
+                observed_only=bool(msg.get("observed_only")),
+                limit=min(int(msg.get("limit") or 12), 100)))
         if cmd == "proximity_calibration":
             return ok(cmd, **proximity.calibrate(
                 self.conn, min_comments=int(msg.get("min_comments") or 8)))

@@ -302,7 +302,7 @@ table.sortable th[aria-sort="none"] .arrow { color: transparent; }
 table.compare td:first-child { color: var(--muted); }
 table.compare .pct { margin-left: 6px; font-size: 11px; }
 
-.findings .metric.hi { border-color: rgba(255,192,0,.35); background: rgba(255,192,0,.06); }
+.metric.hi { border-color: rgba(255,192,0,.35); background: rgba(255,192,0,.06); }
 
 .findings .listtitle { margin: 12px 0 6px; font-size: 12px; }
 .findlist { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.9; }
@@ -368,3 +368,18 @@ table.compare .pct { margin-left: 6px; font-size: 11px; }
 .zbar { display: inline-block; height: 7px; border-radius: 3px; background: var(--surface-3); }
 tr.rowlink.on td { background: var(--surface-2); }
 .toolbar select { max-width: 260px; }
+
+/* ---- new profiles ---- */
+/* One bar per day, its height the whole day's volume and the gold foot the
+   share written by recent arrivals. Stacked rather than drawn as a second row
+   because the quantity that matters is the proportion, and two rows would ask
+   the eye to divide them. */
+.timeline .bar.stackbar { position: relative; overflow: hidden;
+  display: flex; align-items: flex-end; }
+.timeline .bar.stackbar .seg { display: block; width: 100%;
+  background: var(--brand-gold); border-radius: 2px 2px 0 0; }
+
+/* A profile's own daily counts, small enough to sit in a table cell. */
+.spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 20px; width: 90px; }
+.spark span { flex: 1 1 0; min-width: 1px; min-height: 1px;
+  background: var(--accent); border-radius: 1px 1px 0 0; }
