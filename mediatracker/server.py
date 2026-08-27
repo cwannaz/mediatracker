@@ -250,9 +250,14 @@ class Server:
         # the accounts this answers about turned up after the last LLM pass and
         # would not be in that table yet.
         if cmd == "newcomers_overview":
+            # A window in days is resolved on the papers' calendar, like the
+            # article browser's. Left unset, the module picks the first day it
+            # can defend instead of a round number of days.
+            days = int(msg.get("days") or 0)
+            since = msg.get("since") or (str(db.paper_window(days)) if days else None)
             return ok(cmd, **newcomers.overview(
                 self.conn, community=msg.get("community") or "lematin",
-                since=msg.get("since") or None,
+                since=since,
                 min_comments=int(msg.get("min_comments") or 3),
                 limit=min(int(msg.get("limit") or 200), 1000)))
         if cmd == "newcomers_predecessors":

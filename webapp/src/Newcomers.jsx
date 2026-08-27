@@ -28,8 +28,20 @@ const fmtQuiet = (d) => {
   return `${(d / 365.25).toFixed(1)} y`
 }
 
+// Left on `auto` the daemon starts the list the day after dense coverage
+// begins, which is the only cut it can defend. A fixed number of days is a
+// question about the calendar rather than about the corpus, so it may reach
+// back past the coverage the arrivals are measured against — the table's
+// "absent from" column is what shows when it has.
+const WINDOWS = [
+  { id: 0, label: 'Since coverage began' },
+  { id: 7, label: 'Last 7 days' },
+  { id: 14, label: 'Last 14 days' },
+]
+
 export default function Newcomers({ send, onNick }) {
   const [community, setCommunity] = useState('lematin')
+  const [days, setDays] = useState(0)
   const [minComments, setMinComments] = useState(3)
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
@@ -38,11 +50,11 @@ export default function Newcomers({ send, onNick }) {
   useEffect(() => {
     let live = true
     setData(null); setErr(null); setOpen(null)
-    send('newcomers_overview', { community, min_comments: minComments })
+    send('newcomers_overview', { community, days, min_comments: minComments })
       .then((r) => { if (!live) return; if (r.ok) setData(r); else setErr(r.error) })
       .catch(() => {})
     return () => { live = false }
-  }, [send, community, minComments])
+  }, [send, community, days, minComments])
 
   return (
     <>
@@ -55,6 +67,11 @@ export default function Newcomers({ send, onNick }) {
           <input type="number" min="1" max="50" value={minComments} style={{ width: 60 }}
             onChange={(e) => setMinComments(Math.max(1, Number(e.target.value) || 3))} />
         </label>
+        <span className="spacer" />
+        {WINDOWS.map((w) => (
+          <button key={w.id} className={'chip' + (days === w.id ? ' on' : '')}
+            onClick={() => setDays(w.id)}>{w.label}</button>
+        ))}
       </div>
 
       {err && <div className="banner warn">{err}</div>}
@@ -86,16 +103,22 @@ function CoverageNote({ d }) {
         </span>
       </div>
       <p className="subtle" style={{ margin: '8px 0 0' }}>
-        {c.dense_from
-          ? <>Dense coverage of this community runs from {fmtDay(c.dense_from)} —
+        {!c.dense_from
+          ? <>Not enough daily volume yet to call any stretch densely covered, so an
+            arrival here means only that this is the first comment we hold.</>
+          : <>Dense coverage of this community runs from {fmtDay(c.dense_from)} —
             {' '}{c.dense_days} days, counting a day as covered above {c.floor} comments.
             Everything before it is a thin archive of selected threads, so an account
             missing from it may simply have been writing where the crawl was not
-            looking. That is why the list starts the day <em>after</em> coverage
-            begins: on the first day every account in the community looks new,
-            because that is the day we opened our eyes.</>
-          : <>Not enough daily volume yet to call any stretch densely covered, so an
-            arrival here means only that this is the first comment we hold.</>}
+            looking.{' '}
+            {d.since > c.dense_from
+              ? <>That is why the list starts the day <em>after</em> coverage begins: on
+                the first day every account in the community looks new, because that is
+                the day we opened our eyes.</>
+              : <><strong>This window reaches back past that</strong>, so the arrivals
+                dated {fmtDay(c.dense_from)} and earlier are mostly the crawl opening
+                its eyes rather than people joining. The &quot;absent from&quot; column
+                is what separates them: it reads nothing for those.</>}</>}
       </p>
     </div>
   )
