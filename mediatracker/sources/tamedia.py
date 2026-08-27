@@ -200,7 +200,12 @@ def parse_article(data: dict, url: str, *, lang: str = "fr") -> ParsedArticle | 
         updated_at=_parse_dt(meta.get("updated")),
         body_text=body_text,
         body_html=body_html or None,
-        comment_count=None,  # not exposed in the page; count comes from comments
+        # The article page does carry the count, under clientdata.community —
+        # which lets a rescan see that a thread has not grown without paying
+        # for the comment API. It is the site's own figure and need not equal
+        # the number of rows we store: replies and moderated comments are
+        # counted differently. It is only ever compared against itself.
+        comment_count=_comment_count(meta),
         images=images,
         raw_meta={
             "kickword": meta.get("kickword"),
@@ -213,6 +218,22 @@ def parse_article(data: dict, url: str, *, lang: str = "fr") -> ParsedArticle | 
             "commentingEnabled": (meta.get("settings") or {}).get("commentingEnabled"),
         },
     )
+
+
+def _comment_count(meta: dict) -> int | None:
+    """The comment tally the article page prints, as an int.
+
+    Delivered as a string ("54") under meta.clientdata.community, and absent
+    entirely on articles that never opened comments — both of which have to
+    come back as None rather than zero, because "no comments yet" and "we
+    cannot tell" lead to opposite decisions on a rescan.
+    """
+    community = ((meta.get("clientdata") or {}).get("community") or {})
+    raw = community.get("comments")
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_body(elements: list) -> tuple[str, list[ParsedImage]]:

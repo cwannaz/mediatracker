@@ -158,3 +158,23 @@ def test_parse_article_teaser_image_fallback():
     assert len(art.images) == 1
     assert art.images[0].role == "hero"
     assert art.images[0].orig_url == "https://image.lematin.ch/teaser-base.jpg"
+
+
+def test_the_article_page_yields_the_site_comment_count():
+    # Le Matin prints the tally under meta.clientdata.community, as a string.
+    # Having it means a rescan can see that a thread has not grown without
+    # paying for the comment API, which is the expensive half of a scan.
+    data = json.loads(json.dumps(_NEXT))
+    data["props"]["pageProps"]["data"]["content"]["meta"]["clientdata"] = {
+        "community": {"shares": "20", "comments": "54", "views": "9008"}}
+    assert tamedia.parse_article(data, "https://www.lematin.ch/story/x-3").comment_count == 54
+
+
+def test_an_unstated_comment_count_is_unknown_and_not_zero():
+    # "No comments yet" and "we cannot tell" lead to opposite decisions on a
+    # rescan, so a missing tally must never arrive as 0.
+    data = json.loads(json.dumps(_NEXT))
+    assert tamedia.parse_article(data, "https://www.lematin.ch/story/x-4").comment_count is None
+    data["props"]["pageProps"]["data"]["content"]["meta"]["clientdata"] = {
+        "community": {"shares": "20"}}
+    assert tamedia.parse_article(data, "https://www.lematin.ch/story/x-5").comment_count is None
