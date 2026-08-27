@@ -23,6 +23,7 @@ class IngestStats:
     articles_seen: int = 0
     article_snapshots: int = 0
     comments_seen: int = 0
+    threads_skipped: int = 0
     comment_snapshots: int = 0
     images_new: int = 0
     errors: int = 0
@@ -134,9 +135,42 @@ class Pipeline:
         if snap_id is not None:
             await self._write_images(snap_id, article, stats)
 
+        if is_rescan and self._thread_unchanged(aid, article):
+            stats.threads_skipped += 1
+            return
+
         comments = await self._safe_comments(source, article)
         for c in comments:
             self._write_comment(source, aid, c, stats)
+        # Recorded only after the thread was actually read, so a failed fetch
+        # leaves the marker at its old value and the next scan tries again.
+        if article.comment_count is not None and self.conn is not None:
+            db.record_thread_count(self.conn, aid, article.comment_count)
+
+    def _thread_unchanged(self, aid: str, article: ParsedArticle) -> bool:
+        """True when the article page shows the same comment count as the last
+        time we actually read the thread.
+
+        Fetching comments is the expensive half of a rescan — a separate API
+        call plus a page of pagination for every fifty comments — and on a
+        rescan it usually returns exactly what we already hold. Titles that
+        print the count on the article page let us find that out for the price
+        of the page we fetched anyway.
+
+        The comparison is against the count recorded at our last fetch, not
+        against how many comment rows we hold. Those two disagree on nearly
+        half the articles in this corpus — a moderated comment leaves our row
+        behind, and the page does not count replies the way we store them — so
+        our own row count is not a usable proxy. Comparing the site's number to
+        the site's own previous number is sound whatever it happens to count.
+
+        Anything unknown means fetching: a title that prints no count, an
+        article we have never read the thread of, or a count that moved in
+        either direction.
+        """
+        if article.comment_count is None or self.conn is None:
+            return False
+        return article.comment_count == db.last_thread_count(self.conn, aid)
 
     def _write_article(self, jid, aid, canon, article: ParsedArticle, chash, stats) -> int | None:
         fields = {

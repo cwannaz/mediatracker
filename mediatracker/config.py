@@ -33,7 +33,13 @@ class Config:
     scan_period_hours: float = 4.0       # re-scan cadence through the day
     scan_variability_hours: float = 0.5  # ± random jitter so access looks human
     timezone: str = "Europe/Zurich"
-    active_rescan_days: int = 10         # keep re-scanning an article this long
+    # How long an article keeps being re-fetched, counted from ITS publication.
+    # Measured on this corpus, comment threads die within a day: the 99th
+    # percentile of (comment posted_at - article published_at) is 0.8 d on Le
+    # Matin, 2.4 d on 24 heures and 2.2 d on the Tribune. Three days covers
+    # every title's tail with room to spare; ten was four times wider than any
+    # thread lives.
+    active_rescan_days: int = 3
     scan_enabled_default: bool = True
     # fetch
     request_delay_seconds: float = 2.0

@@ -158,6 +158,7 @@ class ScanEngine:
             "articles_seen": stats.articles_seen,
             "article_snapshots": stats.article_snapshots,
             "comments_seen": stats.comments_seen,
+            "threads_skipped": stats.threads_skipped,
             "comment_snapshots": stats.comment_snapshots,
             "images_new": stats.images_new,
             "errors": stats.errors,

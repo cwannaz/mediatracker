@@ -371,6 +371,13 @@ ALTER TABLE article_snapshot ADD COLUMN IF NOT EXISTS source TEXT;   -- news age
 ALTER TABLE article ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ;    -- when the article stopped being reachable
 ALTER TABLE article ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'live';  -- 'live' | 'pdf'
 ALTER TABLE article ADD COLUMN IF NOT EXISTS source_file TEXT;       -- archival source (e.g. a printed PDF)
+
+-- The comment count the article page showed the last time we actually read
+-- the thread. A rescan whose page reports the same number can skip the comment
+-- API entirely, which is the expensive half of the scan. Compared only against
+-- the site's own earlier number: our stored row count is not the same quantity.
+ALTER TABLE article ADD COLUMN IF NOT EXISTS thread_count INTEGER;
+ALTER TABLE article ADD COLUMN IF NOT EXISTS thread_read_at TIMESTAMPTZ;
 """
 
 
@@ -563,9 +570,17 @@ def update_journal_config(conn, jid: str, config: dict) -> None:
 
 
 def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
-    """Canonical URLs of articles seen recently and not marked gone — these are
-    re-scanned each cycle so comment/vote evolution keeps being captured until
-    the article disappears.
+    """Canonical URLs of articles still young enough to gain comments — these
+    are re-scanned each cycle so comment/vote evolution keeps being captured
+    until the thread goes cold.
+
+    The window is on the article's own publication date, never on `last_seen`.
+    `last_seen` records when WE last fetched it, and a rescan refreshes it, so
+    a window on it renews its own membership: once an article entered the
+    work-list it could never leave, and the list only ever grew. It was found
+    holding an article published in 2020, refetched on every scan for years.
+    Where a title publishes no date, `first_seen` stands in — the day the
+    article appeared to us is at least an event outside our control.
 
     Archived captures are excluded: their canonical_url is a pdf:// pseudo-URL
     no fetcher can retrieve, and a printed page is finished — there is no later
@@ -574,15 +589,37 @@ def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT canonical_url FROM article
-            WHERE journal_id = %s AND gone_at IS NULL
-              AND origin <> 'pdf' AND canonical_url NOT LIKE 'pdf://%%'
-              AND last_seen > now() - make_interval(days => %s)
-            ORDER BY last_seen DESC
+            SELECT a.canonical_url,
+                   COALESCE(p.published_at, a.first_seen) AS dated
+            FROM article a
+            LEFT JOIN LATERAL (
+                SELECT published_at FROM article_snapshot
+                WHERE article_id = a.id ORDER BY fetched_at DESC LIMIT 1
+            ) p ON true
+            WHERE a.journal_id = %s AND a.gone_at IS NULL
+              AND a.origin <> 'pdf' AND a.canonical_url NOT LIKE 'pdf://%%'
+              AND COALESCE(p.published_at, a.first_seen)
+                  > now() - make_interval(days => %s)
+            ORDER BY dated DESC
             """,
             (journal_id, since_days),
         )
         return [r[0] for r in cur.fetchall()]
+
+
+def last_thread_count(conn, aid: str) -> int | None:
+    """The comment count the source showed when we last read this thread."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT thread_count FROM article WHERE id = %s", (aid,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def record_thread_count(conn, aid: str, count: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE article SET thread_count = %s, thread_read_at = now() WHERE id = %s",
+            (count, aid))
 
 
 def find_article_by_source_key(conn, journal_id: str, source_key: str) -> tuple[str, str] | None:

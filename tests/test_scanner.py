@@ -51,3 +51,50 @@ def test_disabled_schedule_has_no_next_theoretical():
     # disabled by checking next_theoretical honors the flag via _next_fire path.
     sched = {"enabled": False}
     assert sched.get("enabled") is False
+
+
+# --------------------------------------------------------------------------- #
+# Rescan cost
+# --------------------------------------------------------------------------- #
+
+class _Article:
+    def __init__(self, count):
+        self.comment_count = count
+
+
+class _Conn:
+    """A connection that only knows how to answer the thread-count question."""
+    def __init__(self, stored):
+        self.stored = stored
+
+    def cursor(self):
+        conn = self
+
+        class _Cur:
+            def __enter__(self_): return self_
+            def __exit__(self_, *a): return False
+            def execute(self_, sql, args=None): self_.sql = sql
+            def fetchone(self_): return (conn.stored,)
+        return _Cur()
+
+
+def _pipe(conn):
+    from mediatracker.pipeline import Pipeline
+    p = Pipeline.__new__(Pipeline)          # no fetcher/store needed for this
+    p.conn = conn
+    return p
+
+
+def test_a_thread_is_only_skipped_when_the_source_repeats_its_own_number():
+    p = _pipe(_Conn(42))
+    assert p._thread_unchanged("a", _Article(42)) is True     # unchanged: skip
+    assert p._thread_unchanged("a", _Article(43)) is False    # grew: read it
+    assert p._thread_unchanged("a", _Article(41)) is False    # shrank: read it
+
+
+def test_anything_unknown_means_fetching():
+    # A title that prints no count, and an article whose thread we have never
+    # read, are both cases where not knowing has to mean paying for the fetch.
+    assert _pipe(_Conn(42))._thread_unchanged("a", _Article(None)) is False
+    assert _pipe(_Conn(None))._thread_unchanged("a", _Article(0)) is False
+    assert _pipe(None)._thread_unchanged("a", _Article(5)) is False
