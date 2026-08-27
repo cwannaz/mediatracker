@@ -36,6 +36,7 @@ export default function ProfilePanel({ nick, personaId, send }) {
 
   const p = state.profile
   const lang = p.language || {}
+  const metrics = p.metrics || {}
   const gender = p.gender || {}
   const pol = p.politics || {}
   const phil = p.philosophy || {}
@@ -64,7 +65,7 @@ export default function ProfilePanel({ nick, personaId, send }) {
 
       <div className="card">
         <h2>Language</h2>
-        <Axis label="Accents" value={accentText(lang)} />
+        <Axis label="Accents" value={accentText(lang, metrics)} />
         {lang.accent_note && <p className="subtle" style={{ marginTop: 4 }}>{lang.accent_note}</p>}
         {lang.errors && Object.values(lang.errors).some((n) => n > 0) && (
           <>
@@ -188,11 +189,20 @@ function conf(c) {
   return c == null ? null : `confidence ${Math.round(c * 100)}%`
 }
 
-function accentText(lang) {
+// Judged one comment at a time. A comment with no accent anywhere is a
+// keyboard that cannot make them, not a writer who cannot spell — and the same
+// person accents properly from another machine an hour later. Only a comment
+// that already shows an accent can show a missing one.
+function accentText(lang, metrics) {
   const u = lang.accent_usage
+  const bare = metrics?.unaccented_comment_share
+  const share = bare == null ? null
+    : ` — ${Math.round(bare * 100)}% of comments carry no accent at all, which is counted as equipment, not error`
   if (u === 'absent') return 'never typed — input habit, not counted as error'
-  if (u === 'full') return 'used consistently'
-  if (u === 'partial') return 'used inconsistently — omissions counted as errors'
+  if (u === 'full') return `used consistently${share || ''}`
+  if (u === 'partial') {
+    return `used inconsistently within comments that do carry accents${share || ''}`
+  }
   return '—'
 }
 

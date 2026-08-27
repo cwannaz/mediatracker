@@ -230,19 +230,43 @@ def measure(comments: list[dict]) -> dict:
     accented = sum(1 for w in words if any(unicodedata.combining(ch)
                    for ch in unicodedata.normalize("NFD", w)))
 
-    # Accent discipline (see _ACCENTED_WORDS). `correct` = words written with
-    # their accent; `missing` = the same words written bare. A writer with
-    # correct == 0 simply does not type accents (habit, not error); one with
-    # both is inconsistent, and each miss is a real mistake.
-    correct_acc = sum(freq[w] for w in _ACC_FORMS if w in freq)
-    missing_acc = sum(freq[b] for b in _BARE_FORMS if b in freq)
+    # Accent discipline, judged one comment at a time (see _ACCENTED_WORDS).
+    #
+    # The unit matters. A comment with no accent anywhere in it is not evidence
+    # of carelessness: people write from phones and from keyboards that cannot
+    # produce them, and the same person will accent properly from another
+    # machine an hour later. Aggregating the whole corpus turns that into a
+    # false "inconsistent" — the writer is consistent within every comment, and
+    # only the equipment changed between them.
+    #
+    # So a bare form counts as a mistake only where the same comment shows the
+    # writer could have done otherwise: at least one accent appears in it. The
+    # accent-free comments are counted separately rather than discarded,
+    # because their share is itself a fact about how someone writes.
+    correct_acc = missing_acc = 0
+    unaccented_comments = accented_comments = 0
+    for t in texts:
+        ws = [w.lower() for w in WORD_RE.findall(t)]
+        has_accent = any(unicodedata.combining(ch) for w in ws
+                         for ch in unicodedata.normalize("NFD", w))
+        if has_accent:
+            accented_comments += 1
+        else:
+            unaccented_comments += 1
+            continue                 # no accent to be inconsistent with
+        f = Counter(ws)
+        correct_acc += sum(f[w] for w in _ACC_FORMS if w in f)
+        missing_acc += sum(f[b] for b in _BARE_FORMS if b in f)
+
     # Only ~100 word pairs are checkable, so silence is not proof. Saying
     # "full" because no bare form turned up would claim a writer accents
     # everything on the strength of words they never used.
-    if correct_acc == 0 and missing_acc == 0:
-        accent_style, accent_consistency = None, None
-    elif correct_acc == 0:
+    if accented_comments == 0:
+        # Never an accent anywhere: equipment or habit, and nothing here can
+        # tell which. Not an error either way.
         accent_style, accent_consistency = "absent", None
+    elif correct_acc == 0 and missing_acc == 0:
+        accent_style, accent_consistency = None, None
     elif missing_acc == 0:
         accent_style, accent_consistency = "full-in-sample", 1.0
     else:
@@ -278,6 +302,12 @@ def measure(comments: list[dict]) -> dict:
         "accent_consistency": accent_consistency,
         "accent_correct_hits": correct_acc,
         "accent_missing_hits": missing_acc,
+        # The share of comments written with no accent at all. High alongside a
+        # clean `accent_consistency` is the signature of someone who accents
+        # when the keyboard allows it, which is not the same writer as one who
+        # accents erratically within a single comment.
+        "unaccented_comment_share": round(unaccented_comments / n, 3),
+        "accented_comments": accented_comments,
         "all_caps_word_rate": round(caps_words / nw, 4),
         "exclamations_per_comment": round(exclam / n, 2),
         "questions_per_comment": round(question / n, 2),
@@ -446,6 +476,39 @@ def _reconcile(p: dict, meta: dict) -> list[str]:
                 g["unknown"] = round(1.0 - g["male"] - g["female"], 3)
                 warn.append(f"{meta['id']}: gender probabilities rescaled from {total:.2f}")
     return warn
+
+
+def refresh_metrics(conn, *, min_comments: int = 5) -> dict:
+    """Recompute the deterministic half of every stored profile, in place.
+
+    `measure` changes when a measure is found to have been wrong — the accent
+    rule became per-comment once it turned out that a comment with no accent
+    anywhere is a keyboard, not a mistake — and the inferred half of a profile
+    costs an LLM pass to rebuild. The two do not have to move together: this
+    rewrites `metrics` and the counts and leaves every read of the text alone,
+    so a corrected measure reaches `proximity` without a re-reading.
+
+    Rows whose subject no longer meets `min_comments` are left as they are:
+    deleting a profile is not a metrics update.
+    """
+    updated, skipped = 0, 0
+    for s in build_subjects(conn, min_comments=min_comments):
+        m = measure(s["comments"])
+        stamps = [c["posted_at"] for c in s["comments"] if c.get("posted_at")]
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE author_profile
+                   SET metrics = %s, n_comments = %s, n_chars = %s,
+                       first_seen = %s, last_seen = %s
+                 WHERE community = %s AND subject_kind = %s AND subject_key = %s
+            """, (db._jsonb(m), m["n_comments"], m["n_chars"],
+                  min(stamps) if stamps else None, max(stamps) if stamps else None,
+                  s["community"], s["kind"], s["key"]))
+            if cur.rowcount:
+                updated += 1
+            else:
+                skipped += 1
+    return {"updated": updated, "not_profiled": skipped}
 
 
 def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[str]]:

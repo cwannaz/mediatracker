@@ -62,3 +62,45 @@ def test_shared_and_per_article_schemes_never_collide():
     migration would silently merge unrelated comments."""
     art = ids.article_id("lematin", "https://www.lematin.ch/story/x-1")
     assert ids.shared_comment_id("lematin", "9") != ids.comment_id("lematin", art, "9")
+
+
+# --------------------------------------------------------------------------- #
+# Accent discipline
+# --------------------------------------------------------------------------- #
+
+def _c(*texts):
+    from datetime import datetime, timedelta, timezone
+    t0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    return [{"body_text": t, "posted_at": t0 + timedelta(hours=i)}
+            for i, t in enumerate(texts)]
+
+
+def test_a_comment_with_no_accent_at_all_is_equipment_not_error():
+    from mediatracker.profiling import measure
+    # Same writer, two machines. The bare comment must not make the accented
+    # one look inconsistent: within each comment the writer is consistent, and
+    # only the keyboard changed between them.
+    m = measure(_c("l'économie et la sécurité, déjà vérité",
+                   "economie et securite, deja verite"))
+    assert m["accent_missing_hits"] == 0
+    assert m["accent_style"] == "full-in-sample"
+    assert m["unaccented_comment_share"] == 0.5
+
+
+def test_an_omission_beside_an_accent_in_one_comment_is_an_error():
+    from mediatracker.profiling import measure
+    # Here the writer demonstrably could type the accent and did not, in the
+    # same breath. That is the case the measure exists to catch.
+    m = measure(_c("l'économie, la securite et la verite"))
+    assert m["accent_missing_hits"] >= 2
+    assert m["accent_style"] == "partial"
+    assert m["accent_consistency"] < 1.0
+    assert m["unaccented_comment_share"] == 0.0
+
+
+def test_never_an_accent_anywhere_is_absent_and_carries_no_consistency():
+    from mediatracker.profiling import measure
+    m = measure(_c("economie et securite", "deja la verite du president"))
+    assert m["accent_style"] == "absent"
+    assert m["accent_consistency"] is None      # not 0.0 — there is no verdict
+    assert m["unaccented_comment_share"] == 1.0
