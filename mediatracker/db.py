@@ -1013,6 +1013,14 @@ def suggest_aliases(conn, nick: str, limit: int = 12) -> list[dict]:
         return _rows(cur)
 
 
+def persona_alias_nicks(conn, persona_id) -> list[str]:
+    """Just the nicknames of a persona — no comments, unlike `get_persona`."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT nick FROM persona_alias WHERE persona_id = %s::bigint "
+                    "ORDER BY nick", (persona_id,))
+        return [r[0] for r in cur.fetchall()]
+
+
 def get_profile(conn, *, nick: str | None = None, persona_id: int | None = None,
                 community: str | None = None) -> dict | None:
     """The analysis profile for a subject. A nickname that belongs to a persona

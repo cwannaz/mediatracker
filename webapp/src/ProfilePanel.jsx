@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ReferenceCard } from './Reference.jsx'
 
 // The inferred half of a subject's profile: gender, language mastery, politics
 // (with drift), philosophy, region and milieu. Everything here is an ESTIMATE produced
@@ -62,6 +63,8 @@ export default function ProfilePanel({ nick, personaId, send }) {
           means the comments carried no evidence either way — it is not a middle value.
         </p>
       </div>
+
+      <ReferenceCard r={p.reference} handle={p.label} />
 
       <div className="card">
         <h2>Language</h2>

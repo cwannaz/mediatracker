@@ -6,6 +6,7 @@ import Aggregation from './Aggregation.jsx'
 import Population from './Population.jsx'
 import Proximity from './Proximity.jsx'
 import Newcomers from './Newcomers.jsx'
+import Reference from './Reference.jsx'
 
 const SUBTABS = [
   { id: 'recent', label: 'Yesterday–Today', statKey: 'recent' },
@@ -134,24 +135,6 @@ export default function Browser({ connected, send, route, navigate, back }) {
         {connected && tab === 'sources' && <SourceList send={send} />}
       </div>
     </>
-  )
-}
-
-// What a handle is borrowed from. Blank is the honest majority state — the
-// lexicon behind this is hand-checked and reaches a small fraction of the
-// nicknames — so an empty cell means "not recognised", never "no reference".
-function Reference({ r }) {
-  if (!r) return <span className="subtle">—</span>
-  return (
-    <span className="ref" title={[r.note, r.via && `via ${r.via}`,
-      r.confidence !== 'high' && `${r.confidence} confidence`,
-      r.matched === 'stem' && 'matched without its trailing number']
-      .filter(Boolean).join(' · ')}>
-      <span className={'refdomain d-' + r.domain}>{r.domain}</span>
-      <span className="refwhat">{r.refers_to}</span>
-      {r.device !== 'borrowed' && <em className="refdevice">{r.device}</em>}
-      {r.confidence !== 'high' && <em className="refdevice">?</em>}
-    </span>
   )
 }
 

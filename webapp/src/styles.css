@@ -400,3 +400,25 @@ tr.rowlink.on td { background: var(--surface-2); }
 .refwhat { font-size: 12.5px; }
 .refdevice { font-size: 10.5px; color: var(--brand-gold); font-style: normal; }
 .refdomain.d-politics, .refdomain.d-history { color: var(--brand-gold); }
+
+/* Hover bubble for a nickname reference. Fixed, not absolute: the cell it
+   hangs off sits inside a horizontally scrolling table, which would clip it. */
+.ref { cursor: help; }
+.ref:focus-visible { outline: 2px solid var(--brand-gold); outline-offset: 2px; }
+.refbubble { position: fixed; z-index: 60; display: flex; flex-direction: column;
+  gap: 6px; max-width: 320px; padding: 10px 12px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 12px; line-height: 1.45;
+  pointer-events: none; }
+.refbubble strong { font-size: 13px; }
+.refbubble .bdomain { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); }
+.refbubble .bnote { color: var(--text); }
+.refbubble .bmeta { color: var(--muted); }
+.refbubble .bwarn { color: var(--brand-gold); }
+
+.refhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 10px; }
+.refhandle { font-weight: 600; }
+.refarrow { color: var(--muted); }
+.reftarget { font-size: 17px; font-weight: 600; color: var(--brand-gold); }

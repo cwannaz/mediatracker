@@ -293,6 +293,16 @@ class Server:
             prof = db.get_profile(self.conn, nick=msg.get("nick"),
                                   persona_id=int(pid) if pid is not None else None,
                                   community=msg.get("community"))
+            if prof:
+                # A persona's own label may say nothing while one of its
+                # handles carries the whole reference, so the aliases are
+                # offered to the reading too.
+                aliases = (db.persona_alias_nicks(self.conn, prof["subject_key"])
+                           if prof.get("subject_kind") == "persona" else
+                           [msg.get("nick")] if msg.get("nick") else [])
+                prof["__aliases__"] = aliases
+                nicknames.annotate([prof], field="label", aliases="__aliases__")
+                prof.pop("__aliases__", None)
             return ok(cmd, profile=prof)
         return self._personas(cmd, msg, limit)
 
