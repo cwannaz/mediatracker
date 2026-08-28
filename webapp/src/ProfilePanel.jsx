@@ -179,7 +179,9 @@ export default function ProfilePanel({ nick, personaId, send }) {
         </div>
       )}
 
-      {p.notes && <div className="card"><h2>Notes</h2><p>{p.notes}</p></div>}
+      {/* Distinct from the Notes card: this one is the profiling pass talking,
+          and it is rewritten on every run. */}
+      {p.notes && <div className="card"><h2>Notes from the analysis</h2><p>{p.notes}</p></div>}
     </>
   )
 }

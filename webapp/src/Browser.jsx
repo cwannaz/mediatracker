@@ -257,7 +257,14 @@ function CommenterList({ send, onOpen }) {
           <tbody>
             {rows.map((c) => (
               <tr key={c.nick} className="rowlink" onClick={() => onOpen(c.nick)}>
-                <td><strong>{c.nick}</strong></td>
+                {/* A note nobody can find again is not a record; the marker is
+                    the only thing that says which of 3,600 handles carries one. */}
+                <td><strong>{c.nick}</strong>
+                  {resp?.note_counts?.[c.nick] > 0 &&
+                    <span className="noted" title="has hand-written notes">
+                      {resp.note_counts[c.nick]}
+                    </span>}
+                </td>
                 <td><Reference r={c.reference} /></td>
                 <td>{c.persona_label || <span className="subtle">—</span>}</td>
                 <td className="num">{c.comments}</td>

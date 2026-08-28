@@ -429,3 +429,39 @@ tr.rowlink.on td { background: var(--surface-2); }
 .refhandle { font-weight: 600; }
 .refarrow { color: var(--muted); }
 .reftarget { font-size: 17px; font-weight: 600; color: var(--brand-gold); }
+
+/* ---- notes and off-platform accounts ---- */
+/* Both live inside cards whose surrounding tables set white-space: nowrap, and
+   a note is prose: everything here restates the text properties rather than
+   inheriting them. */
+.note { border-left: 2px solid var(--brand-gold); padding: 2px 0 2px 12px; margin: 0 0 14px; }
+.notebody { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; }
+.notemeta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.notemeta a { color: var(--accent); }
+.notemeta .spacer { flex: 1; }
+
+.noteform { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 4px; }
+.noteform textarea, .noteform select {
+  width: 100%; background: var(--bg); color: var(--text); font: inherit;
+  border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; font-size: 13.5px;
+}
+.noteform textarea { resize: vertical; line-height: 1.55; }
+.noteform select { width: auto; }
+.noteform textarea:focus, .noteform select:focus { outline: none; border-color: var(--accent); }
+.noteform .actions { margin-top: 2px; }
+
+.acct { padding: 2px 0 2px 12px; border-left: 2px solid var(--border-soft); margin: 0 0 14px; }
+.acctline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; }
+.acctline a { color: var(--accent); overflow-wrap: anywhere; }
+.acctline .spacer { flex: 1; }
+.acctwhy { white-space: normal; }
+.platform { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  padding: 2px 7px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
+.platform.p-facebook { background: rgba(66,103,178,.20); color: #7d9bdd; }
+.platform.p-x { background: rgba(160,160,160,.18); color: var(--text); }
+.platform.p-instagram { background: rgba(193,53,132,.18); color: #d16aa8; }
+.platform.p-youtube { background: rgba(209,73,91,.18); color: var(--down); }
+.noted { margin-left: 7px; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: rgba(216,151,60,.18); color: var(--brand-gold); font-weight: 600;
+  vertical-align: middle; }

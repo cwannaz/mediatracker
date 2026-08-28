@@ -86,6 +86,8 @@ LEXICON: dict[str, dict] = {
     "scar": _r("cinema", "Scar", confidence="low", note="the Lion King villain, if it is the reference at all"),
     "darkproutor": _r("cinema", "Darth Vader", device="pun", note="Dark Vador, the French name, crossed with 'prout'"),
     "thisissparta": _r("cinema", "300", note="the film's line, by way of Herodotus"),
+    "randalldibiaski": _r("cinema", "Randall Mindy and Kate Dibiasky", device="combined",
+                          note="the two astronomers of Don't Look Up (2021), crossed into one person and Dibiasky respelt; the joke is a scientist nobody will listen to, and it cannot predate the film"),
 
     # -- comics
     "fluideglacial": _r("comics", "Fluide Glacial", note="Gotlib's satirical monthly, founded 1975; an adult comics culture, not a children's one"),

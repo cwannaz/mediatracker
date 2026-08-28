@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { languageMetrics } from './textmetrics.js'
 import ProfilePanel from './ProfilePanel.jsx'
+import Notes from './Notes.jsx'
+import Accounts from './Accounts.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { if (!v) return '—'; try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -88,6 +90,9 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
           </tbody>
         </table></div>
       </div>
+
+      <Notes personaId={personaId} send={send} />
+      <Accounts personaId={personaId} send={send} />
 
       <div className="card">
         <h2>Merged metadata</h2>

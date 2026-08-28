@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { languageMetrics } from './textmetrics.js'
 import ProfilePanel from './ProfilePanel.jsx'
+import Notes from './Notes.jsx'
+import Accounts from './Accounts.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -47,6 +49,9 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
       <Identity nick={nick} data={data} send={send} reload={load}
         picked={picked} setPicked={setPicked} busy={busy} setBusy={setBusy}
         onPersona={onPersona} />
+
+      <Notes nick={nick} send={send} />
+      <Accounts nick={nick} send={send} />
 
       <div className="card">
         <h2>Metadata</h2>

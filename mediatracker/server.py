@@ -144,7 +144,10 @@ class Server:
                      "findings_overview", "proximity_pairs",
                      "proximity_neighbours", "proximity_timeline",
                      "proximity_calibration", "newcomers_overview",
-                     "newcomers_predecessors"):
+                     "newcomers_predecessors", "list_notes", "add_note",
+                     "update_note", "delete_note", "list_accounts",
+                     "add_account", "update_account", "delete_account",
+                     "elsewhere_overview"):
             if self.conn is None:
                 await ws.send(error(cmd, "degraded: Postgres unavailable"))
                 return
@@ -276,6 +279,7 @@ class Server:
         if cmd == "browse_commenters":
             rows = db.browse_commenters(self.conn, q=q, limit=limit, offset=offset)
             return ok(cmd, commenters=nicknames.annotate(rows),
+                      note_counts=db.note_counts(self.conn),
                       reference_coverage=nicknames.coverage(
                           r["nick"] for r in rows))
         if cmd == "get_commenter":
@@ -304,7 +308,82 @@ class Server:
                 nicknames.annotate([prof], field="label", aliases="__aliases__")
                 prof.pop("__aliases__", None)
             return ok(cmd, profile=prof)
+        if cmd in ("list_notes", "add_note", "update_note", "delete_note"):
+            return self._notes(cmd, msg)
+        if cmd == "elsewhere_overview":
+            return ok(cmd, **db.elsewhere_overview(self.conn, msg.get("community")))
+        if cmd in ("list_accounts", "add_account", "update_account", "delete_account"):
+            return self._accounts(cmd, msg)
         return self._personas(cmd, msg, limit)
+
+    @staticmethod
+    def _subject(msg: dict) -> tuple[str, str]:
+        """Which subject a request is about, keyed as author_profile keys it."""
+        pid = msg.get("persona_id")
+        if pid is not None:
+            return "persona", str(pid)
+        return "nick", str(msg["nick"])
+
+    def _notes(self, cmd: str, msg: dict) -> str:
+        """Hand-written notes on a subject.
+
+        Every branch answers with the subject's whole note list rather than
+        with what it just changed: there is no useful partial state here, and
+        one shape means the view never has to merge a response into what it
+        already had.
+        """
+        if cmd in ("update_note", "delete_note"):
+            # An edit names a note, not a subject — the subject is looked up
+            # from the note so a stale view cannot move one person's note onto
+            # another's page.
+            nid = int(msg["note_id"])
+            found = db.note_subject(self.conn, nid)
+            if found is None:
+                return error(cmd, "note not found")
+            kind, key, community = found
+            if cmd == "delete_note":
+                db.delete_note(self.conn, nid)
+            else:
+                db.update_note(self.conn, nid, body=msg.get("body"),
+                               source=msg.get("source"))
+        else:
+            kind, key = self._subject(msg)
+            community = msg.get("community") or db.subject_community(
+                self.conn, kind=kind, key=key)
+            if cmd == "add_note":
+                db.add_note(self.conn, kind=kind, key=key, community=community,
+                            body=msg.get("body"), source=msg.get("source"))
+        return ok(cmd, kind=kind, key=key, community=community,
+                  notes=db.list_notes(self.conn, kind=kind, key=key,
+                                      community=community))
+
+    def _accounts(self, cmd: str, msg: dict) -> str:
+        """The same writer on networks we do not collect. Same shape and same
+        subject rules as `_notes`."""
+        fields = dict(url=msg.get("url"), platform=msg.get("platform"),
+                      handle=msg.get("handle"),
+                      confidence=msg.get("confidence") or "confirmed",
+                      evidence=msg.get("evidence"))
+        if cmd in ("update_account", "delete_account"):
+            aid = int(msg["account_id"])
+            found = db.account_subject(self.conn, aid)
+            if found is None:
+                return error(cmd, "account not found")
+            kind, key, community = found
+            if cmd == "delete_account":
+                db.delete_account(self.conn, aid)
+            else:
+                db.update_account(self.conn, aid, **fields)
+        else:
+            kind, key = self._subject(msg)
+            community = msg.get("community") or db.subject_community(
+                self.conn, kind=kind, key=key)
+            if cmd == "add_account":
+                db.add_account(self.conn, kind=kind, key=key,
+                               community=community, **fields)
+        return ok(cmd, kind=kind, key=key, community=community,
+                  accounts=db.list_accounts(self.conn, kind=kind, key=key,
+                                            community=community))
 
     def _personas(self, cmd: str, msg: dict, limit: int) -> str:
         """Identity layer: group the nicknames of one person into a persona so
@@ -326,7 +405,8 @@ class Server:
             p = db.get_persona(self.conn, int(msg["persona_id"]), limit=limit or 3000)
             return ok(cmd, persona=p) if p else error(cmd, "persona not found")
         if cmd == "create_persona":
-            pid = db.create_persona(self.conn, label=msg["label"], note=msg.get("note"))
+            pid = db.create_persona(self.conn, label=msg["label"], note=msg.get("note"),
+                                    community=msg.get("community") or "lematin")
             return ok(cmd, persona_id=pid)
         if cmd == "add_alias":
             db.add_alias(self.conn, persona_id=int(msg["persona_id"]), nick=msg["nick"],
@@ -348,8 +428,13 @@ class Server:
         if not nicks:
             return error(cmd, "no nicks given")
         pid = msg.get("persona_id")
+        # A new person belongs to the public their handles write in, not to a
+        # default: linking two 24 heures nicknames must not mint a Le Matin
+        # persona that no query for that community will ever find.
         pid = int(pid) if pid else db.create_persona(
-            self.conn, label=msg.get("label") or nicks[0], note=msg.get("note"))
+            self.conn, label=msg.get("label") or nicks[0], note=msg.get("note"),
+            community=msg.get("community") or db.subject_community(
+                self.conn, kind="nick", key=nicks[0]))
         for n in nicks:
             db.add_alias(self.conn, persona_id=pid, nick=n,
                          confidence=msg.get("confidence", "confirmed"),

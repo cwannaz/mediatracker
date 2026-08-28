@@ -113,6 +113,31 @@ Comment data — including pseudonyms and stylometric author-linkage — is reta
 locally for analysis and is never republished. Keep it that way: any feature that
 would export or expose individuals needs an explicit decision first.
 
+### What a hand writes lives outside what a pass rewrites (2026-08-27)
+
+Notes and off-platform accounts are their own tables (`subject_note`,
+`subject_account`), not columns on `author_profile`. Two reasons, and both
+matter:
+
+* A profiling run rewrites every column of an `author_profile` row. A remark
+  typed by a reader would be erased by the next run of the machine.
+* Everything in `author_profile` is derived from the stored comments and
+  reproducible from them. A note is not, and mixing the two would put an
+  observation and a measurement in the same shape — the same mistake the
+  `metrics` / inferred split exists to prevent.
+
+Both are keyed `(community, subject_kind, subject_key)` like a profile. A
+persona reads its own records **and** those written against each of its
+handles, never the reverse: linking two nicknames must not bury what was
+already recorded about either, while a note about the person says more than any
+one handle can carry.
+
+Off-platform accounts are structured rather than prose because the questions
+worth asking about them are counting ones — how many of a public carry an
+identity elsewhere, on which network, and whether a rename there lines up with
+a rename here. The platform is read off the pasted link rather than asked for,
+so the two cannot disagree.
+
 ## Testing
 
 `pytest`, tests in `tests/` as `test_*.py`. Run with `python3 -m pytest -q` from

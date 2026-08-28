@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -378,6 +379,55 @@ ALTER TABLE article ADD COLUMN IF NOT EXISTS source_file TEXT;       -- archival
 -- the site's own earlier number: our stored row count is not the same quantity.
 ALTER TABLE article ADD COLUMN IF NOT EXISTS thread_count INTEGER;
 ALTER TABLE article ADD COLUMN IF NOT EXISTS thread_read_at TIMESTAMPTZ;
+
+-- What a reader knows about a subject that the corpus cannot hold: a handle
+-- recognised somewhere else, an off-platform rename, a correction to a reading,
+-- anything observed rather than computed.
+--
+-- These are NOT in author_profile even though they describe the same subject.
+-- A profiling pass rewrites every column of that row wholesale, so a remark
+-- typed by hand would be erased by the next run of the machine. It is also the
+-- honest arrangement: everything in author_profile is derived from the stored
+-- text and reproducible from it, and a note is neither.
+CREATE TABLE IF NOT EXISTS subject_note (
+    id           BIGSERIAL PRIMARY KEY,
+    community    TEXT NOT NULL,
+    subject_kind TEXT NOT NULL,   -- 'persona' | 'nick'
+    subject_key  TEXT NOT NULL,   -- persona id (text) | nickname
+    body         TEXT NOT NULL,
+    source       TEXT,            -- where it was observed: a URL, a thread, a paper
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS subject_note_subject_idx
+    ON subject_note (community, subject_kind, subject_key, created_at);
+
+-- The same writer somewhere we do not collect: a Facebook account under a
+-- paper's page, a blog, a handle on another network. Structured rather than
+-- left inside a note, because the interesting questions are counting ones —
+-- which commenters carry an off-platform identity, on which network, and how
+-- often a rename there lines up with a rename here.
+--
+-- `handle` is what the account calls itself and may be anything the person
+-- chose; it is recorded as the account's name, not as a claim about who they
+-- are, and the profiling contract still applies to everything else.
+CREATE TABLE IF NOT EXISTS subject_account (
+    id           BIGSERIAL PRIMARY KEY,
+    community    TEXT NOT NULL,
+    subject_kind TEXT NOT NULL,   -- 'persona' | 'nick'
+    subject_key  TEXT NOT NULL,   -- persona id (text) | nickname
+    platform     TEXT NOT NULL,   -- facebook | x | instagram | youtube | blog | ...
+    handle       TEXT,            -- the name the account goes by there
+    url          TEXT,
+    confidence   TEXT NOT NULL DEFAULT 'confirmed',  -- confirmed | probable | possible
+    evidence     TEXT,            -- why we believe it is the same writer
+    added_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS subject_account_subject_idx
+    ON subject_account (community, subject_kind, subject_key);
+CREATE INDEX IF NOT EXISTS subject_account_platform_idx
+    ON subject_account (platform);
 """
 
 
@@ -950,37 +1000,59 @@ def comments_for_nicks(conn, nicks: list[str], limit: int = 3000) -> list[dict]:
     return rows[:limit]
 
 
-def create_persona(conn, *, label: str, note: str | None = None) -> int:
+def create_persona(conn, *, label: str, note: str | None = None,
+                   community: str = "lematin") -> int:
+    """Create or reuse a person. Labels are unique within a community, not
+    globally: the same handle in two comment backends is two people until
+    something says otherwise, which is the same rule the rest of the schema
+    follows."""
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO persona (label, note) VALUES (%s, %s)
-            ON CONFLICT (label) DO UPDATE SET note = COALESCE(EXCLUDED.note, persona.note),
-                                              updated_at = now()
+            INSERT INTO persona (community, label, note) VALUES (%s, %s, %s)
+            ON CONFLICT (community, label)
+            DO UPDATE SET note = COALESCE(EXCLUDED.note, persona.note),
+                          updated_at = now()
             RETURNING id
-        """, (label, note))
+        """, (community, label, note))
         return cur.fetchone()[0]
 
 
 def add_alias(conn, *, persona_id: int, nick: str, journal_slug: str = "*",
-              confidence: str = "confirmed", evidence: str | None = None,
-              added_by: str = "manual") -> None:
+              community: str | None = None, confidence: str = "confirmed",
+              evidence: str | None = None, added_by: str = "manual") -> None:
+    """Attach a nickname to a person. Keyed on (community, nick), which is the
+    unit a nickname actually identifies someone in; journal_slug is still
+    written for the rows that predate the community column."""
+    community = community or persona_community(conn, persona_id) or "lematin"
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO persona_alias (journal_slug, nick, persona_id, confidence, evidence, added_by)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (journal_slug, nick) DO UPDATE SET
+            INSERT INTO persona_alias (community, journal_slug, nick, persona_id,
+                                       confidence, evidence, added_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (community, nick) DO UPDATE SET
                 persona_id = EXCLUDED.persona_id,
                 confidence = EXCLUDED.confidence,
                 evidence   = COALESCE(EXCLUDED.evidence, persona_alias.evidence),
                 added_by   = EXCLUDED.added_by,
                 added_at   = now()
-        """, (journal_slug, nick, persona_id, confidence, evidence, added_by))
+        """, (community, journal_slug, nick, persona_id, confidence, evidence, added_by))
 
 
-def remove_alias(conn, *, nick: str, journal_slug: str = "*") -> None:
+def persona_community(conn, persona_id) -> str | None:
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM persona_alias WHERE nick = %s AND journal_slug = %s",
-                    (nick, journal_slug))
+        cur.execute("SELECT community FROM persona WHERE id = %s::bigint", (str(persona_id),))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def remove_alias(conn, *, nick: str, journal_slug: str = "*",
+                 community: str | None = None) -> None:
+    with conn.cursor() as cur:
+        if community:
+            cur.execute("DELETE FROM persona_alias WHERE nick = %s AND community = %s",
+                        (nick, community))
+        else:
+            cur.execute("DELETE FROM persona_alias WHERE nick = %s", (nick,))
 
 
 def delete_persona(conn, persona_id: int) -> None:
@@ -1019,6 +1091,275 @@ def persona_alias_nicks(conn, persona_id) -> list[str]:
         cur.execute("SELECT nick FROM persona_alias WHERE persona_id = %s::bigint "
                     "ORDER BY nick", (persona_id,))
         return [r[0] for r in cur.fetchall()]
+
+
+# --------------------------------------------------------------------------- #
+# Notes: what a reader knows that the corpus does not
+# --------------------------------------------------------------------------- #
+
+def note_subjects(kind: str, key, aliases: list[str] | None = None) -> list[tuple[str, str]]:
+    """The (kind, key) pairs whose notes belong to this subject.
+
+    A persona reads its own notes AND those written against each of its
+    handles. Linking two nicknames into one person must not hide what was
+    already recorded about either of them — the whole point of the link is that
+    they are the same writer, so their notes are the same writer's notes.
+
+    A nickname reads only its own: a note attached to a persona is about the
+    person across every handle, and attributing it to one of them would say
+    more than the note does.
+    """
+    pairs = [(kind, str(key))]
+    if kind == "persona":
+        pairs += [("nick", n) for n in (aliases or [])]
+    return pairs
+
+
+def subject_community(conn, *, kind: str, key) -> str:
+    """Which comment public a subject writes in.
+
+    Needed because a note is stored per community for the same reason a profile
+    is: a nickname only identifies someone inside one comment backend. A
+    persona carries its community; a bare nickname is placed by where it has
+    actually commented, most-used first.
+    """
+    if kind == "persona":
+        return persona_community(conn, key) or "lematin"
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.community, count(*) AS n
+            FROM comment c
+            JOIN article a ON a.id = c.article_id
+            JOIN journal j ON j.id = a.journal_id
+            WHERE c.author_nick = %s
+            GROUP BY 1 ORDER BY n DESC LIMIT 1
+        """, (str(key),))
+        row = cur.fetchone()
+        return row[0] if row else "lematin"
+
+
+def list_notes(conn, *, kind: str, key, community: str | None = None) -> list[dict]:
+    """A subject's notes, oldest first — the order they were learnt in.
+
+    Each row carries the handle it was written against, so a persona's page can
+    show that a remark predates the link.
+    """
+    community = community or subject_community(conn, kind=kind, key=key)
+    aliases = persona_alias_nicks(conn, key) if kind == "persona" else []
+    pairs = note_subjects(kind, key, aliases)
+    where = " OR ".join(["(subject_kind = %s AND subject_key = %s)"] * len(pairs))
+    args = [community] + [v for pair in pairs for v in pair]
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT id, community, subject_kind, subject_key, body, source,
+                   created_at, updated_at
+            FROM subject_note
+            WHERE community = %s AND ({where})
+            ORDER BY created_at, id
+        """, args)
+        return _rows(cur)
+
+
+def _note_body(body: str | None) -> str:
+    text = (body or "").strip()
+    if not text:
+        raise ValueError("a note needs something in it")
+    return text
+
+
+def _note_source(source: str | None) -> str | None:
+    text = (source or "").strip()
+    return text or None
+
+
+def add_note(conn, *, kind: str, key, body: str, source: str | None = None,
+             community: str | None = None) -> int:
+    """Record one observation about a subject. Returns the new note's id."""
+    text = _note_body(body)                      # refused before it reaches the DB
+    community = community or subject_community(conn, kind=kind, key=key)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO subject_note (community, subject_kind, subject_key, body, source)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+        """, (community, kind, str(key), text, _note_source(source)))
+        return cur.fetchone()[0]
+
+
+def note_subject(conn, note_id: int) -> tuple[str, str, str] | None:
+    """(kind, key, community) a note hangs off, or None if it is gone."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT subject_kind, subject_key, community FROM subject_note "
+                    "WHERE id = %s", (note_id,))
+        row = cur.fetchone()
+        return (row[0], row[1], row[2]) if row else None
+
+
+def update_note(conn, note_id: int, *, body: str, source: str | None = None) -> None:
+    text = _note_body(body)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE subject_note SET body = %s, source = %s, updated_at = now() "
+                    "WHERE id = %s", (text, _note_source(source), note_id))
+
+
+def delete_note(conn, note_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM subject_note WHERE id = %s", (note_id,))
+
+
+def note_counts(conn, community: str | None = None) -> dict[str, int]:
+    """How many notes each nickname carries, for marking a list. Persona notes
+    are counted under every handle of that persona, since that is where a
+    reader will look for them.
+
+    Resolved in Python rather than by joining on subject_key: the column holds
+    a persona id for one kind of row and a nickname for the other, so any SQL
+    that casts it to an integer fails on the first note written about a
+    nickname — and takes the commenter list down with it.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT subject_kind, subject_key, count(*)
+            FROM subject_note
+            WHERE (%s::text IS NULL OR community = %s::text)
+            GROUP BY 1, 2
+        """, (community, community))
+        rows = cur.fetchall()
+        persona_keys = [k for kind, k, _ in rows if kind == "persona"]
+        aliases: dict[str, list[str]] = {}
+        if persona_keys:
+            cur.execute("SELECT persona_id::text, nick FROM persona_alias "
+                        "WHERE persona_id = ANY(%s::bigint[])", (persona_keys,))
+            for pid, nick in cur.fetchall():
+                aliases.setdefault(pid, []).append(nick)
+
+    counts: dict[str, int] = {}
+    for kind, key, n in rows:
+        for nick in ([key] if kind == "nick" else aliases.get(key, [])):
+            counts[nick] = counts.get(nick, 0) + n
+    return counts
+
+
+# --------------------------------------------------------------------------- #
+# The same writer elsewhere
+# --------------------------------------------------------------------------- #
+
+# Networks worth naming apart, because they are not the same publics. Anything
+# else is stored under its host, which is more useful than a catch-all "other".
+PLATFORM_HOSTS = {
+    "facebook.com": "facebook", "fb.com": "facebook", "m.facebook.com": "facebook",
+    "twitter.com": "x", "x.com": "x",
+    "instagram.com": "instagram",
+    "youtube.com": "youtube", "youtu.be": "youtube",
+    "tiktok.com": "tiktok",
+    "linkedin.com": "linkedin",
+    "reddit.com": "reddit",
+    "bsky.app": "bluesky",
+    "mastodon.social": "mastodon",
+}
+
+
+def account_platform(url: str | None, fallback: str | None = None) -> str:
+    """Which network a pasted link belongs to.
+
+    Derived from the URL rather than asked for, because a reader pasting a link
+    already said which platform it is and being made to say it twice is how the
+    two end up disagreeing. An unrecognised host becomes the host itself.
+    """
+    if fallback:
+        return fallback.strip().lower()
+    text = (url or "").strip()
+    if not text:
+        return "other"
+    host = re.sub(r"^https?://", "", text, flags=re.I).split("/")[0].split("?")[0]
+    host = host.split("@")[-1].lower().strip()
+    if host.startswith("www."):
+        host = host[4:]
+    return PLATFORM_HOSTS.get(host, host or "other")
+
+
+def list_accounts(conn, *, kind: str, key, community: str | None = None) -> list[dict]:
+    """A subject's known accounts elsewhere. Scoped like notes: a persona also
+    sees what was recorded against each of its handles."""
+    community = community or subject_community(conn, kind=kind, key=key)
+    aliases = persona_alias_nicks(conn, key) if kind == "persona" else []
+    pairs = note_subjects(kind, key, aliases)
+    where = " OR ".join(["(subject_kind = %s AND subject_key = %s)"] * len(pairs))
+    args = [community] + [v for pair in pairs for v in pair]
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT id, community, subject_kind, subject_key, platform, handle,
+                   url, confidence, evidence, added_at, updated_at
+            FROM subject_account
+            WHERE community = %s AND ({where})
+            ORDER BY platform, added_at, id
+        """, args)
+        return _rows(cur)
+
+
+def add_account(conn, *, kind: str, key, url: str | None = None,
+                platform: str | None = None, handle: str | None = None,
+                confidence: str = "confirmed", evidence: str | None = None,
+                community: str | None = None) -> int:
+    """Record the same writer on another network. Needs a link or a handle —
+    an account nobody can go and look at is not an observation."""
+    url = _note_source(url)
+    handle = _note_source(handle)
+    if not url and not handle:
+        raise ValueError("an account needs a link or a handle")
+    community = community or subject_community(conn, kind=kind, key=key)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO subject_account (community, subject_kind, subject_key,
+                                         platform, handle, url, confidence, evidence)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (community, kind, str(key), account_platform(url, platform), handle,
+              url, confidence, _note_source(evidence)))
+        return cur.fetchone()[0]
+
+
+def account_subject(conn, account_id: int) -> tuple[str, str, str] | None:
+    """(kind, key, community) an account row hangs off, or None if it is gone."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT subject_kind, subject_key, community FROM subject_account "
+                    "WHERE id = %s", (account_id,))
+        row = cur.fetchone()
+        return (row[0], row[1], row[2]) if row else None
+
+
+def update_account(conn, account_id: int, *, url: str | None = None,
+                   platform: str | None = None, handle: str | None = None,
+                   confidence: str = "confirmed", evidence: str | None = None) -> None:
+    url = _note_source(url)
+    handle = _note_source(handle)
+    if not url and not handle:
+        raise ValueError("an account needs a link or a handle")
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE subject_account
+               SET platform = %s, handle = %s, url = %s, confidence = %s,
+                   evidence = %s, updated_at = now()
+             WHERE id = %s
+        """, (account_platform(url, platform), handle, url, confidence,
+              _note_source(evidence), account_id))
+
+
+def delete_account(conn, account_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM subject_account WHERE id = %s", (account_id,))
+
+
+def elsewhere_overview(conn, community: str | None = None) -> dict:
+    """How much off-platform identity the corpus knows about, by network. The
+    counting question this table exists to answer."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT platform, count(*) AS accounts,
+                   count(DISTINCT (subject_kind, subject_key)) AS subjects
+            FROM subject_account
+            WHERE (%s::text IS NULL OR community = %s::text)
+            GROUP BY 1 ORDER BY 2 DESC
+        """, (community, community))
+        return {"platforms": _rows(cur)}
 
 
 def get_profile(conn, *, nick: str | None = None, persona_id: int | None = None,
