@@ -406,10 +406,17 @@ tr.rowlink.on td { background: var(--surface-2); }
 .ref { cursor: help; }
 .ref:focus-visible { outline: 2px solid var(--brand-gold); outline-offset: 2px; }
 .refbubble { position: fixed; z-index: 60; display: flex; flex-direction: column;
-  gap: 6px; max-width: 320px; padding: 10px 12px; border-radius: 8px;
-  background: var(--surface-2); border: 1px solid var(--border);
+  gap: 6px; width: max-content; max-width: 320px; padding: 10px 12px;
+  border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
   box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 12px; line-height: 1.45;
-  pointer-events: none; }
+  pointer-events: none;
+  /* Every td is white-space: nowrap, and the bubble is a child of one. Without
+     these three it inherits that, the note becomes a single unbroken line
+     wider than the box, and the bubble renders as an empty sliver. Also reset
+     the alignment and weight, so a bubble hanging off a numeric or bold cell
+     reads the same as any other. */
+  white-space: normal; overflow-wrap: anywhere; text-align: left;
+  font-weight: 400; font-variant-numeric: normal; }
 .refbubble strong { font-size: 13px; }
 .refbubble .bdomain { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   color: var(--muted); }
