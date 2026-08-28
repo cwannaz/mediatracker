@@ -16,8 +16,8 @@ import logging
 
 import websockets
 
-from . import (alias_candidates, blobserver, db, ids, newcomers, nicknames,
-               proximity, sources)
+from . import (alias_candidates, blobserver, db, handles, ids, newcomers,
+               nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -278,7 +278,7 @@ class Server:
                 self.conn, min_comments=int(msg.get("min_comments") or 8)))
         if cmd == "browse_commenters":
             rows = db.browse_commenters(self.conn, q=q, limit=limit, offset=offset)
-            return ok(cmd, commenters=nicknames.annotate(rows),
+            return ok(cmd, commenters=handles.annotate(nicknames.annotate(rows)),
                       note_counts=db.note_counts(self.conn),
                       reference_coverage=nicknames.coverage(
                           r["nick"] for r in rows))
@@ -289,7 +289,8 @@ class Server:
         if cmd == "browse_sources":
             return ok(cmd, sources=db.browse_sources(self.conn, limit=limit))
         if cmd == "findings_overview":
-            return ok(cmd, **db.findings_overview(self.conn))
+            return ok(cmd, **handles.overview(self.conn),
+                      **db.findings_overview(self.conn))
         if cmd == "profile_overview":
             return ok(cmd, **db.profile_overview(self.conn, community=msg.get("community")))
         if cmd == "get_profile":

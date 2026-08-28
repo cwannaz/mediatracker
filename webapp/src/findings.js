@@ -21,6 +21,8 @@
 // accurate; it is what lets a later reader tell a fresh finding from a stale one.
 
 const pct = (n, total) => (total ? `${((n / total) * 100).toFixed(1)}%` : '—')
+// A share that arrives already divided.
+const asPct = (s) => (s == null ? '—' : `${(s * 100).toFixed(1)}%`)
 
 // Sum a distribution row set for one community.
 const share = (rows, community, values) => {
@@ -144,6 +146,56 @@ export const SECTIONS = [
         listTitle: 'The nicknames in question — deliberately not merged',
         caveat: 'Whether any of these are the same human is exactly what the '
           + 'profiles now make testable. Nothing here answers it.',
+      },
+      {
+        id: 'signing-shape',
+        claim: 'How a public signs itself is set by the sign-up form, not by the public',
+        status: 'measured',
+        recorded: '2026-08-27',
+        body: [
+          'A handle can be built like a personal name, like a readable persona, or '
+          + 'like nothing at all. That is a real difference in how someone stands in '
+          + 'front of a public, and it is legible from the string with no inference '
+          + 'and no list of names — measured over this corpus, five of 1,666 one-word '
+          + 'handles are given names, so presenting as a person is done with a full '
+          + 'name or not at all.',
+          'Split by community it looks like a difference between two readerships, and '
+          + 'it is not. Le Matin’s own share collapses across the years in the table '
+          + 'below — and the collapse sits entirely inside the printed archive, so the '
+          + 'same capture method is on both sides of it. Le Matin changed comment '
+          + 'platform in the gap between 2014 and 2021. The step is far too sharp to '
+          + 'be a change in who was reading the paper.',
+          'So the variable is real and it belongs to the software. Comparing two '
+          + 'communities on it compares two registration forms first and two publics '
+          + 'a distant second — the same trap as comparing their politics without '
+          + 'noting one corpus is fifteen years long and the other ten days.',
+        ],
+        figures: (d) => {
+          const rows = d.handle_forms || []
+          const at = (c, y) => rows.find((r) => r.community === c && r.year === y)
+          const t = d.handle_form_totals || {}
+          const f = (name) => (t.forms || []).find((x) => x.form === name)
+          return [
+            { k: 'Built like a name', v: asPct(f('personal-name')?.share) },
+            { k: 'A readable persona', v: asPct(f('alias')?.share) },
+            { k: 'Names nothing', v: asPct(f('opaque')?.share) },
+            { k: 'Le Matin 2012', v: asPct(at('lematin', 2012)?.share) },
+            { k: 'Le Matin 2025', v: asPct(at('lematin', 2025)?.share) },
+            { k: 'Astro titles 2026', v: asPct(at('tx-romandie', 2026)?.share) },
+          ]
+        },
+        table: (d) => ({
+          cols: ['nicknames', 'name-shaped', 'share'],
+          rows: (d.handle_forms || []).map((r) => ({
+            label: `${communityName(r.community)} ${r.year}${r.origin === 'pdf' ? ' (archive)' : ''}`,
+            cells: [{ n: r.nicks }, { n: r.name_shaped }, { text: asPct(r.share) }],
+          })),
+        }),
+        caveat: 'Name-shaped is a statement about the string and nothing else. This '
+          + 'corpus signs itself Alex Tincteur (a fire extinguisher), Paul Ochon (a '
+          + 'bolster), Jean Eymar (j’en ai marre) and Nom Prénom (the labels of the '
+          + 'form field), all built exactly like a name. Which of the rest are anyone’s '
+          + 'actual name is not asked and not recorded.',
       },
       {
         id: 'left-share',

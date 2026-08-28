@@ -251,7 +251,7 @@ function CommenterList({ send, onOpen }) {
       {!rows ? <div className="empty">Loading…</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>Nickname</th><th>Reference</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
+            <th>Nickname</th><th>Signs as</th><th>Reference</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
             <th>First seen</th><th>Last seen</th><th className="num">Journals</th><th className="num">Votes</th>
           </tr></thead>
           <tbody>
@@ -265,6 +265,7 @@ function CommenterList({ send, onOpen }) {
                       {resp.note_counts[c.nick]}
                     </span>}
                 </td>
+                <td><HandleForm h={c.handle_form} /></td>
                 <td><Reference r={c.reference} /></td>
                 <td>{c.persona_label || <span className="subtle">—</span>}</td>
                 <td className="num">{c.comments}</td>
@@ -279,6 +280,18 @@ function CommenterList({ send, onOpen }) {
         </table></div>
       )}
     </>
+  )
+}
+
+// The shape of a handle, not a claim about it: `personal-name` says the string
+// is built like a name, and this corpus is full of jokes built exactly that way.
+function HandleForm({ h }) {
+  if (!h) return <span className="subtle">—</span>
+  return (
+    <span className={'hform f-' + h.form} title={h.meaning}>
+      {h.form === 'personal-name' ? 'a name' : h.form === 'alias' ? 'a persona' : 'a string'}
+      {h.full_caps_surname && <em title="typed as into a legal-name field"> caps</em>}
+    </span>
   )
 }
 

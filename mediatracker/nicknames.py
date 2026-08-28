@@ -87,6 +87,32 @@ LEXICON: dict[str, dict] = {
     "scar": _r("cinema", "Scar", confidence="low", note="the Lion King villain, if it is the reference at all"),
     "darkproutor": _r("cinema", "Darth Vader", device="pun", note="Dark Vador, the French name, crossed with 'prout'"),
     "thisissparta": _r("cinema", "300", note="the film's line, by way of Herodotus"),
+    # -- name-shaped jokes. A whole genre in this corpus: a handle built exactly
+    # like a forename and a surname that resolves, said aloud, to an ordinary
+    # French sentence. They are the reason `handles.form` reports the SHAPE of a
+    # handle and never claims it is a name.
+    "alextincteur": _r("language", "un extincteur", device="pun", note="a fire extinguisher, said as a name"),
+    "paulochon": _r("language", "un polochon", device="pun", note="a bolster"),
+    "jeaneymar": _r("language", "j'en ai marre", device="pun", note="I have had enough — the commonest complaint in the corpus, worn as a name"),
+    "enaimarre": _r("language", "j'en ai marre", device="pun"),
+    "jeanneytromar": _r("language", "j'en ai trop marre", device="pun", note="the same complaint, intensified"),
+    "jeanrigole": _r("language", "j'en rigole", device="pun", note="I laugh at it"),
+    "saradotte": _r("language", "ça radote", device="pun", note="it repeats itself — aimed at the comment section as much as at the news"),
+    "alainprovist": _r("language", "à l'improviste", device="pun", note="unannounced"),
+    "gerardmenvusa": _r("language", "j'en ai vu ça", device="pun", note="a stock French joke-name of the Bison Futé generation"),
+    "sanouminelemorale": _r("language", "ça nous mine le moral", device="pun", note="it grinds our spirits down"),
+    "bulldozzeur": _r("language", "bulldozer", device="pun"),
+    "povtache": _r("language", "pauvre tache", device="pun", note="an insult, addressed to nobody in particular"),
+    "annacoluthe": _r("language", "anacoluthe", device="pun", note="the rhetorical figure of a broken sentence — a grammarian's joke, and the most learned handle here"),
+    "rontudju": _r("language", "rontudju", note="the Lyonnais oath, a softened nom de Dieu; see also dedioudediou"),
+    "justeleblanc": _r("cinema", "Juste Leblanc", note="Le Dîner de cons — the man with no forename, because Juste IS the forename"),
+    "robindeboire": _r("literature", "Robin des Bois", device="combined", note="crossed with déboire, a setback", confidence="medium"),
+    "gaellefawkes": _r("history", "Guy Fawkes", device="combined", note="by way of the V for Vendetta mask, given a French forename", confidence="medium"),
+    "guillaumetell": _r("mythology", "William Tell", note="the founding Swiss legend, signed as if it were an ordinary name"),
+    "mistermxyzptlk": _r("comics", "Mr. Mxyzptlk", note="the Superman imp who can only be banished by making him say his own name backwards"),
+    "bipbip": _r("television", "Bip Bip", note="the Road Runner's French name"),
+    "babyboomerang": _r("language", "baby boomer", device="blend", note="crossed with boomerang — the generation label thrown back"),
+
     "randalldibiaski": _r("cinema", "Randall Mindy and Kate Dibiasky", device="combined",
                           note="the two astronomers of Don't Look Up (2021), crossed into one person and Dibiasky respelt; the joke is a scientist nobody will listen to, and it cannot predate the film"),
 
