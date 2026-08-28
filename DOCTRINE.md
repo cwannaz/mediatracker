@@ -113,6 +113,14 @@ Comment data — including pseudonyms and stylometric author-linkage — is reta
 locally for analysis and is never republished. Keep it that way: any feature that
 would export or expose individuals needs an explicit decision first.
 
+**Real names are uninteresting, not forbidden** (Cedric, 2026-08-27). The
+database already holds journalists' names, and a commenter's name that turns up
+in a note or a handle is not a problem. The line is one of purpose: *this is not
+a system for tracking real people down.* So nothing guards the free-text fields,
+and nothing should — but no feature should set out to resolve a pseudonym to a
+person either, and the profiling pass still records what places a writer rather
+than who they are, because that is what the sociology needs.
+
 ### What a hand writes lives outside what a pass rewrites (2026-08-27)
 
 Notes and off-platform accounts are their own tables (`subject_note`,

@@ -27,7 +27,6 @@ export default function Notes({ nick, personaId, send }) {
   const [err, setErr] = useState(null)
   const [editing, setEditing] = useState(null)   // note id, or 'new'
 
-  const subject = personaId != null ? { persona_id: personaId } : { nick }
   const key = personaId != null ? `p${personaId}` : `n${nick}`
 
   const call = useCallback((cmd, args) => {
@@ -118,9 +117,6 @@ function NoteForm({ note, busy, onSave, onCancel }) {
         <button className="btn" disabled={!can}
           onClick={() => onSave(body, source)}>{note ? 'Save' : 'Add note'}</button>
         <button className="btn secondary" disabled={busy} onClick={onCancel}>Cancel</button>
-        <span className="subtle" style={{ alignSelf: 'center' }}>
-          Names stay out: the study records what places a writer, never who they are.
-        </span>
       </div>
     </div>
   )

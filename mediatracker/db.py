@@ -328,9 +328,9 @@ ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFA
 
 -- What a commenter volunteers about the environment they formed in: social
 -- origin, schooling, trade, household, generation. Kept because it is usually
--- what explains how someone came to think as they do, and kept categorically —
--- the profiling contract forbids a name of any kind, so nothing here locates a
--- person even though it describes one.
+-- what explains how someone came to think as they do, and kept categorically:
+-- a name would answer a question this study is not asking, so the block
+-- describes a person without setting out to locate one.
 ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS milieu JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE persona ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
 

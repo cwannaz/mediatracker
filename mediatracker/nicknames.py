@@ -17,9 +17,10 @@ allusion, which is public by construction because the commenter published it.
 
 **Handles that merely look like an ordinary personal name get no reading, on
 purpose.** A great many here read as a plausible first name and surname. Some
-will be invented, some may be the writer's own, and there is no way to tell
-from the string — so classifying them would either assert an identity the
-study refuses to record, or guess. Silence is the correct output.
+will be invented, some may be the writer's own, and the string cannot tell them
+apart — so any reading would be a guess dressed as a finding. It would also be
+an empty one: this column exists to say what culture a handle draws on, and a
+name that is just a name draws on none. Silence is the correct output.
 
 Coverage is deliberately partial and hand-checked. An unrecognised handle
 returns nothing rather than a guess: a column of confident nonsense would be
