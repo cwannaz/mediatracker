@@ -472,3 +472,11 @@ tr.rowlink.on td { background: var(--surface-2); }
 .hform.f-personal-name { background: rgba(216,151,60,.16); color: var(--brand-gold); }
 .hform.f-alias { background: rgba(88,166,255,.14); color: #7fb2f0; }
 .hform em { font-style: normal; opacity: .7; }
+
+/* ---- handles built from the same letters ---- */
+.anag { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
+.anag.k-reversal { background: rgba(216,151,60,.16); color: var(--brand-gold); }
+.anag.k-anagram { background: rgba(88,166,255,.14); color: #7fb2f0; }
+.anag em { font-style: normal; text-transform: none; letter-spacing: 0;
+  color: var(--text); margin-left: 5px; }

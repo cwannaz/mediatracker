@@ -251,7 +251,7 @@ function CommenterList({ send, onOpen }) {
       {!rows ? <div className="empty">Loading…</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
-            <th>Nickname</th><th>Signs as</th><th>Reference</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
+            <th>Nickname</th><th>Signs as</th><th>Reference</th><th>Anagram</th><th>Person</th><th className="num">Comments</th><th className="num">Articles</th>
             <th>First seen</th><th>Last seen</th><th className="num">Journals</th><th className="num">Votes</th>
           </tr></thead>
           <tbody>
@@ -267,6 +267,7 @@ function CommenterList({ send, onOpen }) {
                 </td>
                 <td><HandleForm h={c.handle_form} /></td>
                 <td><Reference r={c.reference} /></td>
+                <td><Anagram a={c.anagram} /></td>
                 <td>{c.persona_label || <span className="subtle">—</span>}</td>
                 <td className="num">{c.comments}</td>
                 <td className="num">{c.articles}</td>
@@ -280,6 +281,24 @@ function CommenterList({ send, onOpen }) {
         </table></div>
       )}
     </>
+  )
+}
+
+// Handles built from the same letters. Unlike everything else in this column
+// family this is not an inference — the letters match or they do not. What it
+// deliberately does NOT show is a forename and surname in the other order,
+// which in 2012 was the sign-up form's two boxes rather than anyone's choice.
+function Anagram({ a }) {
+  if (!a) return <span className="subtle">—</span>
+  const label = a.kind === 'reversal' ? 'backwards'
+    : a.kind === 'mirror' ? 'mirrors itself' : 'same letters'
+  return (
+    <span className={'anag k-' + a.kind}
+      title={a.built_from ? `built from "${a.built_from}"` : undefined}>
+      {label}
+      {a.partners?.length > 0 && <em> {a.partners.join(', ')}</em>}
+      {a.kind === 'mirror' && a.built_from && <em> {a.built_from}</em>}
+    </span>
   )
 }
 
@@ -309,7 +328,7 @@ function PersonaList({ send, onOpen }) {
     <Coverage c={resp?.reference_coverage} />
     <div className="table-wrap"><table>
       <thead><tr>
-        <th>Person</th><th>Reference</th><th className="num">Aliases</th><th className="num">Comments</th>
+        <th>Person</th><th>Reference</th><th>Anagram</th><th className="num">Aliases</th><th className="num">Comments</th>
         <th className="num">Articles</th><th>First seen</th><th>Last seen</th>
         <th className="num">Journals</th><th className="num">Votes</th>
       </tr></thead>
@@ -318,6 +337,7 @@ function PersonaList({ send, onOpen }) {
           <td><strong>{p.label}</strong>
             <div className="subtle">{(p.aliases || []).join(', ')}</div></td>
           <td><Reference r={p.reference} /></td>
+          <td><Anagram a={p.anagram} /></td>
           <td className="num">{p.n_aliases}</td>
           <td className="num">{p.comments}</td>
           <td className="num">{p.articles}</td>

@@ -16,8 +16,8 @@ import logging
 
 import websockets
 
-from . import (alias_candidates, blobserver, db, handles, ids, newcomers,
-               nicknames, proximity, sources)
+from . import (alias_candidates, anagrams, blobserver, db, handles, ids,
+               newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -278,7 +278,13 @@ class Server:
                 self.conn, min_comments=int(msg.get("min_comments") or 8)))
         if cmd == "browse_commenters":
             rows = db.browse_commenters(self.conn, q=q, limit=limit, offset=offset)
-            return ok(cmd, commenters=handles.annotate(nicknames.annotate(rows)),
+            # The anagram index is built over the whole corpus, never over the
+            # page: a handle's partner is rarely on the same screen, and a
+            # page-local index would call it unmatched out of pagination alone.
+            rows = anagrams.annotate(
+                handles.annotate(nicknames.annotate(rows)),
+                index=anagrams.load(self.conn))
+            return ok(cmd, commenters=rows,
                       note_counts=db.note_counts(self.conn),
                       reference_coverage=nicknames.coverage(
                           r["nick"] for r in rows))
@@ -399,6 +405,13 @@ class Server:
             return ok(cmd, strong=strong, weak=weak, linked=sorted(linked))
         if cmd == "list_personas":
             rows = db.list_personas(self.conn)
+            # A person is flagged when ANY of their handles is, since the whole
+            # point of the grouping is that the handles are one writer.
+            index = anagrams.load(self.conn)
+            for r in rows:
+                hits = [index[a] | {"handle": a}
+                        for a in (r.get("aliases") or []) if a in index]
+                r["anagram"] = hits[0] if hits else None
             return ok(cmd, personas=nicknames.annotate(
                 rows, field="label", aliases="aliases"),
                 reference_coverage=nicknames.coverage(r["label"] for r in rows))
