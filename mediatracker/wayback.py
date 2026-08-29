@@ -61,9 +61,14 @@ class WaybackClient:
     # arrived in 45s usually never does, and at five retries one such URL cost
     # ten minutes of a night that only has a few.
     timeout: float = 120.0
-    snapshot_timeout: float = 45.0
+    # 30s, not 45, and one attempt rather than two. A page the archive has not
+    # begun sending in half a minute is usually one it will not send at all,
+    # and after a few thousand requests in a day it appears to answer by
+    # holding connections open rather than by refusing outright. Spending 98
+    # seconds discovering that costs more than the page is worth.
+    snapshot_timeout: float = 30.0
     max_retries: int = 5
-    snapshot_retries: int = 2
+    snapshot_retries: int = 1
     backoff_base: float = 8.0       # first retry waits this long, then doubles
     max_consecutive_failures: int = 12
     user_agent: str = ("MediaTracker/0.1 (private sociological research; "
