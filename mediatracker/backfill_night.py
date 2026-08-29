@@ -12,11 +12,18 @@ capped bite, and the rounds come back for more only once every leg has had one.
 
 Legs are ordered by what the corpus is missing:
 
-  1. Le Matin 2013-2016 — the hole. The corpus jumps from 2012 to 2021.
-  2. The Tribune and 24 heures, any year — live scanning of those began in
+  1. Le Matin 2013-2014 — the two legs already partly in. Finishing them gives
+     two whole years, where spreading the same effort gives four quarter-done
+     ones and no complete year to reason about.
+  2. Le Matin 2012 — **not** covered by the printed archive in any useful
+     sense. Those pages are threads Cedric commented on, so the material is
+     selected by one participant's activity and says nothing about the year.
+     Measured against the archive's unselected capture of 2012, the
+     name-shaped share differs by fourteen points.
+  3. The Tribune and 24 heures, any year — live scanning of those began in
      August 2026, so their entire history is missing, not merely a stretch.
-  3. Le Matin 2012 — already represented by the printed archive, so the least
-     valuable comment-bearing year, but it validates against known material.
+  4. Le Matin 2015-2016 last, not least: they are by far the largest legs
+     (16k and 12k articles) and would eat every other leg's budget.
 
 Everything is resumable: each capture is recorded by digest, so a later round
 of the same leg continues rather than repeats, and so does a later night.
