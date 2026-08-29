@@ -47,6 +47,33 @@ def survey(client: WaybackClient, journals, kinds) -> list[dict]:
     return out
 
 
+def status(conn) -> int:
+    """Where the backfill has got to. Reads only; safe while a run is going."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*), max(processed_at) FROM archive_capture")
+        n, last = cur.fetchone()
+        print(f"captures processed : {n}   last write {last}")
+        cur.execute("""SELECT journal_slug, kind, count(*), sum(comments)
+                       FROM archive_capture GROUP BY 1,2 ORDER BY 3 DESC""")
+        for slug, kind, c, cm in cur.fetchall():
+            print(f"  {slug:10s} {kind:13s} {c:6d} captures  {cm or 0:7d} comments")
+        cur.execute("""SELECT count(*) FROM comment c JOIN article a ON a.id=c.article_id
+                       WHERE a.origin='wayback'""")
+        print(f"comments recovered : {cur.fetchone()[0]}")
+        cur.execute("""SELECT count(DISTINCT c.author_nick) FROM comment c
+                       JOIN article a ON a.id=c.article_id WHERE a.origin='wayback'""")
+        print(f"nicknames recovered: {cur.fetchone()[0]}")
+        cur.execute("SELECT count(*), count(DISTINCT author_nick) FROM comment")
+        c, nk = cur.fetchone()
+        print(f"CORPUS now         : {c} comments, {nk} nicknames")
+        cur.execute("""SELECT EXTRACT(YEAR FROM cs.posted_at)::int y, count(*)
+                       FROM comment c JOIN comment_snapshot cs ON cs.comment_id=c.id
+                       JOIN article a ON a.id=c.article_id WHERE a.origin='wayback'
+                       GROUP BY 1 ORDER BY 1""")
+        print("by comment year    :", {y: n for y, n in cur.fetchall() if y})
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="mediatracker.backfill_cli")
     p.add_argument("--journal", action="append",
@@ -58,6 +85,8 @@ def main(argv=None) -> int:
                    help="every journal, every kind, threads before articles")
     p.add_argument("--survey", action="store_true",
                    help="count captures only; fetch nothing")
+    p.add_argument("--status", action="store_true",
+                   help="what the archive has yielded so far; touches nothing")
     p.add_argument("--limit", type=int, default=None,
                    help="stop after this many captures per leg (for a trial run)")
     p.add_argument("--delay", type=float, default=2.0,
@@ -82,6 +111,9 @@ def main(argv=None) -> int:
         log.error("no database; refusing to fetch what we cannot store")
         return 2
     backfill.ensure_schema(conn)
+
+    if args.status:
+        return status(conn)
 
     client = WaybackClient(min_delay=args.delay)
 
