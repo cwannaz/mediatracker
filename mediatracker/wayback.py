@@ -51,8 +51,14 @@ class WaybackClient:
     """One request at a time, with a floor between them."""
 
     min_delay: float = 2.0          # seconds between requests
+    # CDX legitimately takes a minute to enumerate a year, so it keeps the long
+    # timeout. A single page does not: measured, a snapshot that has not
+    # arrived in 45s usually never does, and at five retries one such URL cost
+    # ten minutes of a night that only has a few.
     timeout: float = 120.0
+    snapshot_timeout: float = 45.0
     max_retries: int = 5
+    snapshot_retries: int = 2
     backoff_base: float = 8.0       # first retry waits this long, then doubles
     max_consecutive_failures: int = 12
     user_agent: str = ("MediaTracker/0.1 (private sociological research; "
@@ -73,17 +79,20 @@ class WaybackClient:
             time.sleep(naptime)
             self.sleep_seconds += naptime
 
-    def get(self, url: str) -> bytes:
+    def get(self, url: str, *, timeout: float | None = None,
+            retries: int | None = None) -> bytes:
         """One GET, paced and retried. Raises GaveUp when the archive has been
         failing long enough that continuing would just be rude."""
-        for attempt in range(self.max_retries):
+        timeout = timeout or self.timeout
+        retries = retries or self.max_retries
+        for attempt in range(retries):
             self._wait()
             req = urllib.request.Request(url, headers={
                 "User-Agent": self.user_agent,
                 "Accept-Encoding": "gzip, deflate",
             })
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
                     raw = resp.read()
                     enc = (resp.headers.get("content-encoding") or "").lower()
                 self._last_request = time.monotonic()
@@ -111,12 +120,12 @@ class WaybackClient:
                     raise GaveUp(
                         f"{self._consecutive_failures} consecutive failures; "
                         f"stopping rather than pushing on ({exc})") from exc
-                if attempt == self.max_retries - 1:
+                if attempt == retries - 1:
                     raise
                 nap = self.backoff_base * (2 ** attempt)
                 log.warning("archive said %s; backing off %.0fs (attempt %d/%d)",
                             status or type(exc).__name__, nap,
-                            attempt + 1, self.max_retries)
+                            attempt + 1, retries)
                 time.sleep(nap)
                 self.sleep_seconds += nap
         raise GaveUp("unreachable")
@@ -165,7 +174,8 @@ class WaybackClient:
         The `id_` suffix asks for the original bytes: no injected banner, no
         rewritten links, which is what a parser wants.
         """
-        raw = self.get(f"{WEB_ENDPOINT}/{timestamp}id_/{original}")
+        raw = self.get(f"{WEB_ENDPOINT}/{timestamp}id_/{original}",
+                       timeout=self.snapshot_timeout, retries=self.snapshot_retries)
         return raw.decode("utf-8", errors="replace")
 
 
