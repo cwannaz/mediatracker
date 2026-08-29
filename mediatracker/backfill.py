@@ -160,6 +160,7 @@ class Stats:
     comment_snapshots: int = 0
     empty: int = 0
     errors: int = 0
+    dead: int = 0
     started: float = field(default_factory=time.monotonic)
 
     def as_dict(self) -> dict:
@@ -183,6 +184,12 @@ def ensure_schema(conn) -> None:
         );
         CREATE INDEX IF NOT EXISTS archive_capture_journal_idx
             ON archive_capture (journal_slug, timestamp);
+
+        -- A capture the CDX index lists but the replay engine will not serve.
+        -- Recording the dead ones is what makes a resume cheap: without it the
+        -- todo list keeps them forever, and every restart grinds through the
+        -- same 404s before reaching anything fetchable.
+        ALTER TABLE archive_capture ADD COLUMN IF NOT EXISTS ok BOOLEAN NOT NULL DEFAULT TRUE;
         """)
 
 
@@ -192,14 +199,15 @@ def already_done(conn) -> set[str]:
         return {r[0] for r in cur.fetchall()}
 
 
-def _record(conn, *, digest, slug, timestamp, original, kind, comments) -> None:
+def _record(conn, *, digest, slug, timestamp, original, kind, comments,
+            ok: bool = True) -> None:
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO archive_capture
-                (digest, journal_slug, timestamp, original, kind, comments)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (digest, journal_slug, timestamp, original, kind, comments, ok)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (digest) DO NOTHING
-        """, (digest, slug, timestamp, original, kind, comments))
+        """, (digest, slug, timestamp, original, kind, comments, ok))
 
 
 # --------------------------------------------------------------------------- #
@@ -299,9 +307,19 @@ def run(conn, *, slug: str, kind: str, year: int, client: WaybackClient,
         except GaveUp:
             log.error("[%s %s %d] archive is unwell; stopping this leg", slug, kind, year)
             raise
-        except Exception as exc:                        # a missing capture is fine
-            log.debug("skip %s: %s", row["original"], exc)
+        except Exception as exc:
             stats.errors += 1
+            # A 404 or 403 is the archive saying this capture is not replayable,
+            # which will still be true tomorrow — record it so no future run
+            # spends a request on it again. A timeout might be this minute's
+            # weather, so it is left to be retried.
+            if getattr(exc, "code", None) in (404, 403):
+                stats.dead += 1
+                _record(conn, digest=digest, slug=slug, timestamp=row["timestamp"],
+                        original=row["original"], kind=kind, comments=None, ok=False)
+                done.add(digest)
+            else:
+                log.debug("retryable failure on %s: %s", row["original"], exc)
             continue
 
         stats.captures += 1
