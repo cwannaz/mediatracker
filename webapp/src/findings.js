@@ -171,6 +171,13 @@ export const SECTIONS = [
           + 'meaning required. To comment at all you had to supply something shaped '
           + 'like a forename and a surname. When the papers left that platform the '
           + 'requirement went with it, and the public reverted to pseudonyms.',
+          'The archive also exposed a whole genre of evasion that the two boxes '
+          + 'produced. Pierre Erreip and Claude Edualc are a forename beside itself '
+          + 'spelled backwards; Jean Boillat and Jean Taillob are one forename with '
+          + 'the surname anagrammed. Faced with a field demanding a family name, a '
+          + 'reader who did not want to give one built it out of the name they had '
+          + 'already typed. None of these were visible before the missing years came '
+          + 'back — they are the archive answering a question about itself.',
           'Three oddities in the handles fall out of the same two boxes. The order '
           + 'swaps — herve tinguely and tinguely herve, the same person on different '
           + 'days — are two fields nobody checked the order of. The handles reading '
