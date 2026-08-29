@@ -121,6 +121,30 @@ and nothing should — but no feature should set out to resolve a pseudonym to a
 person either, and the profiling pass still records what places a writer rather
 than who they are, because that is what the sociology needs.
 
+### Archive capture is a third kind of evidence (2026-08-28)
+
+`article.origin` now takes three values, and they are not interchangeable:
+
+* `live` — we asked the site, on a schedule, and it answered. Absence means the
+  thread was not there.
+* `pdf` — Cedric printed the page. A deliberate, selective sample.
+* `wayback` — a crawler happened to visit once. **Absence means nothing at
+  all**, and presence is one moment: a thread caught at noon is missing its
+  afternoon, and the same thread caught twice is two different lengths.
+
+Every query that compares volumes across time has to say which origins it is
+standing on, the way the community split already has to. The 2012-2016 material
+arriving from the Internet Archive is `wayback`, sits beside `pdf` captures of
+some of the same threads, and will double-count a comment only if the two
+sources disagree on its id — which they do, because the printed archive has no
+comment ids and uses a synthetic one. `build_subjects` already de-duplicates
+identical text before measuring; that is the thing keeping this honest, and it
+must keep being true.
+
+**Only the archive has comments.** Every paid press database — Swissdox, SMD,
+Factiva — indexes what the newsroom published, not what the public wrote
+underneath. See `SOURCES-BACKLOG.md`.
+
 ### What a hand writes lives outside what a pass rewrites (2026-08-27)
 
 Notes and off-platform accounts are their own tables (`subject_note`,
