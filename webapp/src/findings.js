@@ -92,7 +92,7 @@ export const SECTIONS = [
       },
       {
         id: 'archive-vs-live',
-        claim: 'Most of the Le Matin corpus is archive, not live capture',
+        claim: 'The printed archive is a sample of one commenter’s own threads, not of the paper',
         status: 'measured',
         recorded: '2026-08-24',
         body: [
@@ -100,6 +100,18 @@ export const SECTIONS = [
           + 'ago; the Astro material is all live scanning from August 2026 onward. '
           + 'That difference explains several of the gaps in the next section, and '
           + 'it should be held in mind everywhere the two are compared.',
+          'It is worse than merely partial. Those pages were printed because '
+          + 'Cedric had commented on them (confirmed 2026-08-29), so the sample is '
+          + 'selected by one participant’s own activity. Everyone else in it is '
+          + 'there for having written in a thread he was also writing in. It is '
+          + 'evidence about those threads and no evidence at all about the year — '
+          + 'not a thin sample of the paper, a complete sample of something else.',
+          'The size of the distortion is now measurable, because the Internet '
+          + 'Archive supplies the same years unselected. On the one variable tested '
+          + 'so far, how many handles are built like a personal name, 2012 reads 56% '
+          + 'in the printed material and 71% in the archive: fourteen points, in a '
+          + 'year where both cover the same paper. Any figure computed on pdf rows '
+          + 'alone should be assumed to carry a distortion of that order.',
           'Archived captures are excluded from re-scanning: a pdf:// pseudo-URL is '
           + 'not retrievable and a printed page is finished. Before that filter '
           + 'existed every scan logged 345 fetch errors trying.',

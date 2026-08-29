@@ -34,10 +34,16 @@ log = logging.getLogger("mediatracker.night")
 
 # (journal, year), most valuable first. Threads only — article pages keep.
 LEGS: list[tuple[str, int]] = [
-    ("lematin", 2015), ("lematin", 2016), ("lematin", 2014), ("lematin", 2013),
+    # Finish the years already partly in before thinning new ones (Cedric,
+    # 2026-08-29): two complete years beat four quarter-done ones.
+    ("lematin", 2013), ("lematin", 2014),
+    # 2012 is NOT covered by the printed archive in any useful sense — those
+    # pages are threads Cedric commented on, so the year is effectively unheld.
+    ("lematin", 2012),
     ("tdg", 2014), ("tdg", 2015), ("24heures", 2014), ("24heures", 2015),
-    ("tdg", 2013), ("tdg", 2016), ("24heures", 2013), ("24heures", 2016),
-    ("lematin", 2012), ("tdg", 2012), ("24heures", 2012),
+    ("tdg", 2013), ("24heures", 2013), ("tdg", 2012), ("24heures", 2012),
+    ("lematin", 2015), ("lematin", 2016),
+    ("tdg", 2016), ("24heures", 2016),
     ("lematin", 2011), ("tdg", 2011), ("24heures", 2011),
     ("lematin", 2010), ("lematin", 2009), ("lematin", 2008),
 ]

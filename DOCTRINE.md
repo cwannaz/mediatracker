@@ -127,7 +127,13 @@ than who they are, because that is what the sociology needs.
 
 * `live` — we asked the site, on a schedule, and it answered. Absence means the
   thread was not there.
-* `pdf` — Cedric printed the page. A deliberate, selective sample.
+* `pdf` — Cedric printed the page. **Selected by his own participation**: the
+  threads are ones he commented on (confirmed 2026-08-29), so every other
+  commenter in them is present for having written alongside him. This is not a
+  thin sample of the paper; it is a complete sample of a different thing, and
+  no share computed on `pdf` rows describes a year. Measured against the
+  archive's unselected capture of the same year, the name-shaped share differs
+  by fourteen points.
 * `wayback` — a crawler happened to visit once. **Absence means nothing at
   all**, and presence is one moment: a thread caught at noon is missing its
   afternoon, and the same thread caught twice is two different lengths.
