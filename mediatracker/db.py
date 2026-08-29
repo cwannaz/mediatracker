@@ -619,6 +619,13 @@ def update_journal_config(conn, jid: str, config: dict) -> None:
         cur.execute("UPDATE journal SET config = %s WHERE id = %s", (_jsonb(config), jid))
 
 
+# Origins that are a record of the past rather than a live page. Nothing with
+# one of these is ever re-fetched: the URL is either unretrievable or no longer
+# served, and there is no later state to catch. Named once so that adding a
+# third kind of archive cannot silently put it back in the live work-list.
+ARCHIVE_ORIGINS = ("pdf", "wayback")
+
+
 def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
     """Canonical URLs of articles still young enough to gain comments — these
     are re-scanned each cycle so comment/vote evolution keeps being captured
@@ -632,10 +639,17 @@ def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
     Where a title publishes no date, `first_seen` stands in — the day the
     article appeared to us is at least an event outside our control.
 
-    Archived captures are excluded: their canonical_url is a pdf:// pseudo-URL
-    no fetcher can retrieve, and a printed page is finished — there is no later
-    state to catch. An archive that merged into a crawled article keeps
-    origin='live' and so keeps being re-scanned, which is the intent."""
+    Archived captures are excluded, both kinds. A pdf:// pseudo-URL is not
+    retrievable and a printed page is finished. A wayback capture is worse than
+    useless here: its URL is a real one the live site no longer serves, and it
+    carries no published_at on purpose — dating a 2012 article by the 2016 crawl
+    that caught it would be a lie — so `first_seen` stands in and every archived
+    article looks like it was published the moment the backfill wrote it. Left
+    in, 4,595 recovered articles joined the live work-list overnight and pushed
+    one Tribune scan from 27 minutes to six and a half hours.
+
+    An archive that merged into a crawled article keeps origin='live' and so
+    keeps being re-scanned, which is the intent."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -647,12 +661,13 @@ def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:
                 WHERE article_id = a.id ORDER BY fetched_at DESC LIMIT 1
             ) p ON true
             WHERE a.journal_id = %s AND a.gone_at IS NULL
-              AND a.origin <> 'pdf' AND a.canonical_url NOT LIKE 'pdf://%%'
+              AND a.origin <> ALL(%s)
+              AND a.canonical_url NOT LIKE 'pdf://%%'
               AND COALESCE(p.published_at, a.first_seen)
                   > now() - make_interval(days => %s)
             ORDER BY dated DESC
             """,
-            (journal_id, since_days),
+            (journal_id, list(ARCHIVE_ORIGINS), since_days),
         )
         return [r[0] for r in cur.fetchall()]
 

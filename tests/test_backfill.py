@@ -104,3 +104,18 @@ def test_otherwise_the_latest_capture_wins_because_threads_only_grow():
             {"original": "http://x.ch/a/story/9999999?comments=1", "timestamp": "20160101000000"}]
     kept = bf.newest_per_article(rows)
     assert len(kept) == 1 and kept[0]["timestamp"] == "20160101000000"
+
+
+def test_archive_captures_never_join_the_live_rescan_list():
+    # A wayback article's URL is a real one the live site no longer serves, and
+    # it carries no published_at on purpose, so `first_seen` stands in and it
+    # looks published the moment the backfill wrote it. Left in the work-list,
+    # 4,595 recovered articles pushed one Tribune scan from 27 minutes to six
+    # and a half hours.
+    from mediatracker import db
+    assert "wayback" in db.ARCHIVE_ORIGINS
+    assert "pdf" in db.ARCHIVE_ORIGINS
+    # whatever origin the backfill writes must be one the work-list excludes
+    import inspect
+    src = inspect.getsource(bf.ingest)
+    assert 'origin="wayback"' in src
