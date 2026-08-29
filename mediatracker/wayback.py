@@ -12,12 +12,17 @@ built to take less than it is offered:
   * a hard ceiling on consecutive failures, so a bad night stops the run
     instead of hammering through it.
 
+`http.client.HTTPException` is in the retry set deliberately: an IncompleteRead
+is not an OSError, so it used to escape the client entirely and be read one
+level up as "this leg has nothing left", quietly abandoning a whole year.
+
 Stdlib only, and synchronous on purpose: a backfill is a batch job, and running
 it off the daemon's event loop keeps it from competing with live scanning.
 """
 from __future__ import annotations
 
 import gzip
+import http.client
 import logging
 import time
 import urllib.error
@@ -107,7 +112,8 @@ class WaybackClient:
                 self._consecutive_failures = 0
                 return raw
             except (urllib.error.HTTPError, urllib.error.URLError,
-                    ArchiveBusy, TimeoutError, OSError) as exc:
+                    http.client.HTTPException, ArchiveBusy, TimeoutError,
+                    OSError) as exc:
                 self._last_request = time.monotonic()
                 status = getattr(exc, "code", None)
                 # A 404 is an answer, not a failure: that snapshot is simply
