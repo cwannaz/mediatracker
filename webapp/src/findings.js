@@ -149,9 +149,9 @@ export const SECTIONS = [
       },
       {
         id: 'signing-shape',
-        claim: 'How a public signs itself is set by the sign-up form, not by the public',
+        claim: 'How a public signs itself is set by the sign-up form — and here the form is a box marked “Nom*”',
         status: 'measured',
-        recorded: '2026-08-27',
+        recorded: '2026-08-28',
         body: [
           'A handle can be built like a personal name, like a readable persona, or '
           + 'like nothing at all. That is a real difference in how someone stands in '
@@ -159,12 +159,25 @@ export const SECTIONS = [
           + 'and no list of names — measured over this corpus, five of 1,666 one-word '
           + 'handles are given names, so presenting as a person is done with a full '
           + 'name or not at all.',
-          'Split by community it looks like a difference between two readerships, and '
-          + 'it is not. Le Matin’s own share collapses across the years in the table '
-          + 'below — and the collapse sits entirely inside the printed archive, so the '
-          + 'same capture method is on both sides of it. Le Matin changed comment '
-          + 'platform in the gap between 2014 and 2021. The step is far too sharp to '
-          + 'be a change in who was reading the paper.',
+          'Recovering 2012–2016 from the Internet Archive turned this from a '
+          + 'suggestive gap into a mechanism. Both publics sat around 80% '
+          + 'name-shaped through those years and both then collapsed — Le Matin to '
+          + 'roughly one per cent, the Astro titles to a quarter. The high plateau is '
+          + 'the same on both, measured from the same capture method, so it is not an '
+          + 'artefact of how the material was collected.',
+          'The cause is in the archived markup. Tamedia’s Newsnetz comment form did '
+          + 'not offer a nickname field at all: it had two boxes, fbFormN_firstName '
+          + 'labelled “Prénom*” and fbFormN_surname labelled “Nom*”, the asterisks '
+          + 'meaning required. To comment at all you had to supply something shaped '
+          + 'like a forename and a surname. When the papers left that platform the '
+          + 'requirement went with it, and the public reverted to pseudonyms.',
+          'Three oddities in the handles fall out of the same two boxes. The order '
+          + 'swaps — herve tinguely and tinguely herve, the same person on different '
+          + 'days — are two fields nobody checked the order of. The handles reading '
+          + '“Nom Prénom” and “Prénom Nom” are people typing the form’s own labels '
+          + 'into the form. And the name-shaped puns are the interesting case: '
+          + 'Alex Tincteur, Paul Ochon, Jean Eymar and Sara Dotte are all somebody '
+          + 'satisfying a real-name requirement while refusing to meet it.',
           'So the variable is real and it belongs to the software. Comparing two '
           + 'communities on it compares two registration forms first and two publics '
           + 'a distant second — the same trap as comparing their politics without '
@@ -191,11 +204,11 @@ export const SECTIONS = [
             cells: [{ n: r.nicks }, { n: r.name_shaped }, { text: asPct(r.share) }],
           })),
         }),
-        caveat: 'Name-shaped is a statement about the string and nothing else. This '
-          + 'corpus signs itself Alex Tincteur (a fire extinguisher), Paul Ochon (a '
-          + 'bolster), Jean Eymar (j’en ai marre) and Nom Prénom (the labels of the '
-          + 'form field), all built exactly like a name. Which of the rest are anyone’s '
-          + 'actual name is not asked and not recorded.',
+        caveat: 'Name-shaped is a statement about the string and nothing else, and '
+          + 'under a form that demanded a name it says even less about the writer: a '
+          + 'required field is answered by everyone, honestly or not. Which of these '
+          + 'are anyone’s actual name is not asked and not recorded. The archive rows '
+          + 'below are single crawler visits, so their counts are a floor.',
       },
       {
         id: 'left-share',
