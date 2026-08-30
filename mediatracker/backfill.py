@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 
 from . import archive_parse as ap
+from . import archive_parse_lmo as lmo
 from . import db, ids, sources
 from .config import load_config
 from .wayback import GaveUp, WaybackClient
@@ -57,6 +58,15 @@ KINDS: dict[str, dict] = {
         "filter": r".*comments\.html.*",
         "years": range(2016, 2022),
         "what": "comments.html?article= thread pages",
+    },
+    # The era before Newsnetz. Between roughly 2009 and March 2012 these titles
+    # ran a Drupal site that rendered the whole thread on the article page, so
+    # there is no ?comments=1 view to ask for — the article URL IS the thread.
+    # Its grammar is a slug with the id glued on the end: /actu/suisse/<slug>-287915
+    "lmo": {
+        "filter": r".*-[0-9]{5,}$",
+        "years": range(2009, 2013),
+        "what": "Drupal-era article pages, thread inline (has account keys)",
     },
     # Article pages: headline, byline, thread SIZE, and a two-comment preview
     # that the template renders even when the thread page was never captured.
@@ -90,7 +100,8 @@ def article_url_of(snapshot_url: str) -> str:
 
 # "/story/?comments=1" with nothing after it is a section index, not an
 # article — the archive holds thousands and they never carry a thread.
-_HAS_ARTICLE_ID = re.compile(r"/story/\d+|/\d{6,}")
+# The third form, "-287915" glued to the end of a slug, is the Drupal era's.
+_HAS_ARTICLE_ID = re.compile(r"/story/\d+|/\d{6,}|-\d{5,}$")
 # Thumbnails live under /files/imagecache/<size>/story/<something>.jpg, and the
 # digits in a filename like "090109_Faitdiv.jpg" satisfy the article-id pattern
 # exactly as a story id does. Left unfiltered, an early-year article leg is
@@ -234,8 +245,12 @@ def ingest(conn, *, slug: str, page: str, original: str, timestamp: str,
     aid = ids.article_id(slug, canonical)
     jid = ids.journal_id(slug)
 
-    art = ap.parse_article(page, original)
-    comments = ap.parse_comments(page)
+    # Which stack rendered this page decides which reader can read it. The
+    # markup is asked, not the year: the changeover was a deployment, and a
+    # capture taken days either side of it carries whichever it carries.
+    reader = lmo if lmo.looks_like_lmo(page) else ap
+    art = reader.parse_article(page, original)
+    comments = reader.parse_comments(page)
 
     db.upsert_article(conn, aid=aid, journal_id=jid, canonical_url=canonical,
                       source_key=art.get("source_id"), origin="wayback")
@@ -262,9 +277,11 @@ def ingest(conn, *, slug: str, page: str, original: str, timestamp: str,
         if c["parent_id"]:
             parent = (ids.shared_comment_id(community, c["parent_id"]) if shared
                       else ids.comment_id(slug, aid, c["parent_id"]))
+        # The Drupal era is the only stretch that has an account key; the
+        # Newsnetz reader leaves it absent rather than inventing one.
         db.upsert_comment(conn, cid=cid, article_id=aid, source_key=key,
                           parent_id=parent, author_nick=c["author_nick"],
-                          author_key=None)
+                          author_key=c.get("author_key"))
         stats.comments += 1
         chash = ids.content_hash(c["body_text"] or "", str(c["like_count"] or ""),
                                  str(c["dislike_count"] or ""))

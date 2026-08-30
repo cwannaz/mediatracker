@@ -132,3 +132,30 @@ def test_a_thumbnail_is_not_an_article():
     # and the real thing still passes
     assert bf.worth_fetching("http://www.24heures.ch/vaud/story/12345678")
     assert bf.worth_fetching("http://www.lematin.ch/12420661/print.html?comments=1")
+
+
+def test_the_drupal_url_grammar_is_recognised():
+    # The pre-2012 article URL glues the id to the end of the slug, with no
+    # /story/ and no trailing-slash id. Unrecognised, the whole era is
+    # invisible to the fetcher no matter what the parser can read.
+    assert bf.worth_fetching(
+        "http://www.lematin.ch/sports/coupe-monde/vuvuzelas-bientot-interdits-stades-287915")
+    assert bf.worth_fetching("http://www.lematin.ch/actu/suisse/elevage-crevettes-tendance-133009")
+    # still not a section index, and still not a thumbnail
+    assert not bf.worth_fetching("http://www.lematin.ch/actu/suisse/")
+    assert not bf.worth_fetching("http://www.lematin.ch/actu/suisse/photo-287915.jpg")
+
+
+def test_the_reader_is_chosen_by_the_markup_not_the_year():
+    # The changeover was a deployment, so a capture from the same week can be
+    # either stack. ingest asks the page.
+    import inspect
+    src = inspect.getsource(bf.ingest)
+    assert "looks_like_lmo(page)" in src
+    assert 'author_key=c.get("author_key")' in src
+
+
+def test_the_drupal_era_is_a_leg_the_runner_knows_about():
+    spec = bf.KINDS["lmo"]
+    assert 2009 in spec["years"] and 2012 in spec["years"]
+    assert 2013 not in spec["years"]      # Newsnetz by then
