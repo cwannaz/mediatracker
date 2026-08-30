@@ -151,6 +151,38 @@ must keep being true.
 Factiva — indexes what the newsroom published, not what the public wrote
 underneath. See `SOURCES-BACKLOG.md`.
 
+### The corpus spans two platforms, and only one of them had accounts (2026-08-30)
+
+The recoverable past is not one era but two, and they differ in what they can
+be asked:
+
+* **Drupal, roughly 2009 to March 2012.** The article page carries the whole
+  thread inline; the URL is a slug with the id glued on the end. Every comment
+  names `/users/<key>`, a real account identifier, with the display form beside
+  it — `MountaiDiver` posting from `/users/mountaidiver`. No reply threading,
+  no like counts.
+* **Newsnetz, March 2012 to about 2017.** The thread lives at `?comments=1`.
+  Reply threading survives in an HTML comment, and likes and dislikes are
+  counted. **No user id of any kind.**
+
+So identity is a different question on either side of March 2012. Before it,
+two comments can be tied to one account outright. After it, a nickname is all
+there is, and every claim that two handles are one writer is an inference from
+style — which is what `alias_candidates` and the proximity view exist to make,
+and why they return a shortlist and never a verdict. A method calibrated on the
+Newsnetz years cannot be validated on itself; the Drupal years are the only
+stretch of this corpus that carries ground truth about succession, and that
+makes them worth more per page than their comment counts suggest.
+
+The corollary is a trap. `author_key` is present for one era and absent for the
+other, so any count grouped by it silently becomes a count of 2009-2012. Group
+by nickname unless the question is specifically about accounts, and say which
+era the answer stands on.
+
+Which reader parses a page is decided by the markup, never by the capture year:
+the changeover was a deployment, and captures from the same week fall either
+side of it.
+
 ### What a hand writes lives outside what a pass rewrites (2026-08-27)
 
 Notes and off-platform accounts are their own tables (`subject_note`,
