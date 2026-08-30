@@ -119,3 +119,16 @@ def test_archive_captures_never_join_the_live_rescan_list():
     import inspect
     src = inspect.getsource(bf.ingest)
     assert 'origin="wayback"' in src
+
+
+def test_a_thumbnail_is_not_an_article():
+    # /files/imagecache/150x100/story/090109_Faitdiv.jpg has "/story/" and six
+    # digits, so it satisfies the article-id pattern exactly as a story id
+    # does. Unfiltered, the 2009-2011 24 heures article legs enumerated 100%
+    # images and one night fetched 529 JPEGs into the article table.
+    assert not bf.worth_fetching(
+        "http://www.24heures.ch/files/imagecache/150x100/story/090109_Faitdiv.jpg")
+    assert not bf.worth_fetching("http://www.tdg.ch/story/12345678/photo.PNG")
+    # and the real thing still passes
+    assert bf.worth_fetching("http://www.24heures.ch/vaud/story/12345678")
+    assert bf.worth_fetching("http://www.lematin.ch/12420661/print.html?comments=1")

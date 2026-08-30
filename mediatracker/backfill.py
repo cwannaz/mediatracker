@@ -91,10 +91,18 @@ def article_url_of(snapshot_url: str) -> str:
 # "/story/?comments=1" with nothing after it is a section index, not an
 # article — the archive holds thousands and they never carry a thread.
 _HAS_ARTICLE_ID = re.compile(r"/story/\d+|/\d{6,}")
+# Thumbnails live under /files/imagecache/<size>/story/<something>.jpg, and the
+# digits in a filename like "090109_Faitdiv.jpg" satisfy the article-id pattern
+# exactly as a story id does. Left unfiltered, an early-year article leg is
+# entirely JPEGs: the 2009-2011 24 heures enumerations were 100% images.
+_ASSET = re.compile(r"\.(?:jpe?g|png|gif|svg|webp|ico|css|js|pdf|xml|zip)$", re.I)
 
 
 def worth_fetching(url: str) -> bool:
-    return bool(_HAS_ARTICLE_ID.search(urlsplit(url).path))
+    path = urlsplit(url).path
+    if _ASSET.search(path):
+        return False
+    return bool(_HAS_ARTICLE_ID.search(path))
 
 
 def _rank(row: dict) -> tuple:
