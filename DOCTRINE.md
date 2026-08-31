@@ -151,6 +151,33 @@ must keep being true.
 Factiva — indexes what the newsroom published, not what the public wrote
 underneath. See `SOURCES-BACKLOG.md`.
 
+### The year a capture was taken is not the year its comments were written (2026-08-31)
+
+Obvious in hindsight, and it produced a wrong answer anyway. Asked whether 2007
+could be covered, I enumerated the archive for 2007 captures of the article
+grammar, found zero, and reported that there was nothing to fetch. Then a
+night of fetching **2008** captures returned **531 comments dated 2007** —
+July 2007 onward, on articles whose threads kept growing until a crawler
+finally visited in 2008.
+
+The error was treating a capture as a window onto its own date. A capture is a
+window onto everything the page held *up to* that date, and on these platforms
+a thread is rendered whole. So the reachable past of a comment public extends
+behind the earliest capture, by however long the threads had been accumulating.
+
+Two consequences for planning:
+
+* **A year with no captures is not a year with no comments.** Before writing
+  one off, check whether the *next* year's captures reach back into it — they
+  are the same fetch, at no extra cost.
+* **The way to get more of an early year is to fetch more of the year after.**
+  There is no separate leg to run.
+
+The measured shape for Le Matin: a trickle from July 2007 (4, 6, 10 a month),
+then 246 in November and 265 in December. The comment system opened in mid-2007
+and found its public that autumn — four months before the URL grammar the
+archive can be searched by even existed.
+
 ### The corpus spans three platforms, and identity gets worse over time (2026-08-30)
 
 The recoverable past is not one era but two, and they differ in what they can
