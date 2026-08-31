@@ -145,14 +145,21 @@ class WaybackClient:
     # ------------------------------------------------------------------ #
 
     def cdx(self, url_pattern: str, *, year: int | None = None,
+            frm: str | None = None, to: str | None = None,
             match_type: str = "domain", url_filter: str | None = None,
             collapse: str | None = "urlkey", limit: int = 30000,
             fields: str = "timestamp,original,digest,statuscode") -> list[dict]:
-        """Enumerate captures. Always narrow: a year, a pattern, a filter.
+        """Enumerate captures. Always narrow: a span, a pattern, a filter.
 
         `url_filter` is a CDX regex applied to the original URL — the way to
         ask for "article pages with comments" without a wildcard query the
         archive will refuse.
+
+        `frm`/`to` take YYYYMMDD and override `year`. They exist because a
+        whole-year query against a busy domain is the one shape the search API
+        reliably fails at: it does not error, it trickles, and a socket timeout
+        measures inactivity rather than total time, so the call can hang for
+        half an hour and never raise. A month is small enough to come back.
         """
         q = {
             "url": url_pattern,
@@ -164,7 +171,9 @@ class WaybackClient:
         }
         if collapse:
             q["collapse"] = collapse
-        if year:
+        if frm and to:
+            q["from"], q["to"] = frm, to
+        elif year:
             q["from"], q["to"] = f"{year}0101", f"{year}1231"
         parts = [(k, v) for k, v in q.items()]
         if url_filter:

@@ -26,6 +26,7 @@ page rather than the run.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import re
@@ -174,9 +175,47 @@ def cdx_cached(client: WaybackClient, domain: str, *, kind: str, year: int,
             return json.loads(path.read_text())
         except ValueError:
             log.warning("unreadable cdx cache %s; re-querying", path)
-    rows = client.cdx(domain, year=year, url_filter=KINDS[kind]["filter"])
+    rows = cdx_by_month(client, domain, kind=kind, year=year)
     path.write_text(json.dumps(rows))
     return rows
+
+
+def cdx_by_month(client: WaybackClient, domain: str, *, kind: str,
+                 year: int) -> list[dict]:
+    """One year of listings, asked for a month at a time.
+
+    A whole-year query against a busy domain is the shape the search API
+    reliably fails at — it trickles rather than erroring, and because a socket
+    timeout measures inactivity the call can hang for half an hour without
+    raising. Twelve small queries come back. They also fail independently, so
+    a bad month costs a month instead of the leg.
+    """
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    missed = []
+    for month in range(1, 13):
+        last = calendar.monthrange(year, month)[1]
+        frm, to = f"{year}{month:02d}01", f"{year}{month:02d}{last:02d}"
+        try:
+            rows = client.cdx(domain, frm=frm, to=to,
+                              url_filter=KINDS[kind]["filter"])
+        except Exception as exc:
+            log.warning("[%s %s %d-%02d] month failed: %s: %s",
+                        domain, kind, year, month, type(exc).__name__, exc)
+            missed.append(month)
+            continue
+        for r in rows:
+            key = (r.get("timestamp"), r.get("original"))
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+        log.info("[%s %s %d-%02d] %d captures (running %d)",
+                 domain, kind, year, month, len(rows), len(out))
+    if missed:
+        # Recorded rather than raised: a leg listing eleven months is worth
+        # fetching, and the cache says plainly which month is absent.
+        log.warning("[%s %s %d] months not listed: %s", domain, kind, year, missed)
+    return out
 
 
 @dataclass

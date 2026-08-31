@@ -188,3 +188,44 @@ def test_the_reader_is_chosen_among_three_eras():
     src = inspect.getsource(bf.ingest)
     assert "looks_like_reactions(page)" in src
     assert "looks_like_lmo(page)" in src
+
+
+def test_a_year_is_asked_for_a_month_at_a_time():
+    # A whole-year CDX query against a busy domain does not error, it trickles
+    # — and a socket timeout measures inactivity, so the call hangs for half an
+    # hour and never raises. Two legs were lost to this. Months come back.
+    calls = []
+
+    class FakeClient:
+        def cdx(self, domain, *, frm=None, to=None, url_filter=None, **kw):
+            calls.append((frm, to))
+            if frm.endswith("0201"):
+                raise RuntimeError("archive said 504")
+            return [{"timestamp": frm + "000000", "original": f"http://x/{frm}"}]
+
+    rows = bf.cdx_by_month(FakeClient(), "lematin.ch", kind="lmo", year=2010)
+    assert len(calls) == 12
+    assert calls[0] == ("20100101", "20100131")
+    assert calls[1] == ("20100201", "20100228")      # 2010 is not a leap year
+    # a failed month costs a month, not the leg
+    assert len(rows) == 11
+
+
+def test_a_leap_february_is_asked_for_whole():
+    calls = []
+
+    class FakeClient:
+        def cdx(self, domain, *, frm=None, to=None, url_filter=None, **kw):
+            calls.append((frm, to)); return []
+
+    bf.cdx_by_month(FakeClient(), "lematin.ch", kind="lmo", year=2012)
+    assert ("20120201", "20120229") in calls
+
+
+def test_the_same_capture_seen_in_two_months_is_kept_once():
+    class FakeClient:
+        def cdx(self, domain, *, frm=None, to=None, url_filter=None, **kw):
+            return [{"timestamp": "20100115000000", "original": "http://x/a"}]
+
+    rows = bf.cdx_by_month(FakeClient(), "lematin.ch", kind="lmo", year=2010)
+    assert len(rows) == 1
