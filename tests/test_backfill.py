@@ -265,3 +265,23 @@ def test_a_comment_with_no_id_of_its_own_is_identified_by_content():
     src = inspect.getsource(bf.ingest)
     assert "synthetic_comment_id" in src
     assert "source_key=key or None" in src
+
+
+def test_the_publishers_own_back_catalogue_never_joins_the_rescan_list():
+    # A sitemap row is the live site read years after the fact. It carries
+    # live-quality parsing but archive-quality evidence: an empty thread may
+    # always have been empty, or may have been pruned since. Rescanning a
+    # quarter of a million of them daily would cost hours and learn nothing.
+    from mediatracker import db
+    assert "sitemap" in db.ARCHIVE_ORIGINS
+
+
+def test_the_years_with_no_public_are_not_fetched():
+    # Comments were switched off 2017-2020: the archive holds no captures,
+    # sampled pages report commentingEnabled false with a zero count across 32
+    # articles, and Cedric's own printouts stop in 2015 and resume in 2021.
+    # Articles exist for those years; a commenting public does not.
+    from mediatracker import sitemap_backfill as sb
+    for dead in (2017, 2018, 2019, 2020):
+        assert dead not in sb.YEARS_WITH_COMMENTS
+    assert 2021 in sb.YEARS_WITH_COMMENTS and 2026 in sb.YEARS_WITH_COMMENTS

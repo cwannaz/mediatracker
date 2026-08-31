@@ -623,7 +623,11 @@ def update_journal_config(conn, jid: str, config: dict) -> None:
 # one of these is ever re-fetched: the URL is either unretrievable or no longer
 # served, and there is no later state to catch. Named once so that adding a
 # third kind of archive cannot silently put it back in the live work-list.
-ARCHIVE_ORIGINS = ("pdf", "wayback")
+# Origins that must never join the live rescan work-list. All three are
+# historical: a printed page, an archive capture, or the publisher's own back
+# catalogue read years later. Rescanning them daily would cost hours and learn
+# nothing, and it once pushed one Tribune scan from 27 minutes to six hours.
+ARCHIVE_ORIGINS = ("pdf", "wayback", "sitemap")
 
 
 def active_article_urls(conn, journal_id: str, *, since_days: int) -> list[str]:

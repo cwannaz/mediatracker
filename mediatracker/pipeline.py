@@ -30,11 +30,19 @@ class IngestStats:
 
 
 class Pipeline:
-    def __init__(self, *, conn, blobs: BlobStore, store, fetcher: Fetcher) -> None:
+    def __init__(self, *, conn, blobs: BlobStore, store, fetcher: Fetcher,
+                 origin: str = "live") -> None:
         self.conn = conn            # psycopg connection or None (degraded)
         self.blobs = blobs
         self.store = store          # JsonlStore
         self.fetcher = fetcher
+        # How the rows this pipeline writes should be labelled. The daily scan
+        # is "live": we asked on a schedule, so absence means the thread was
+        # not there. A run walking the publisher's own back-catalogue is
+        # "sitemap": the same live site, but read years after the fact, so an
+        # empty thread may be an empty thread or a pruned one, and these
+        # articles must not join the rescan work-list.
+        self.origin = origin
 
     async def ingest_journal(self, source: Source, *, since_days: int = 10,
                              on_progress=None) -> IngestStats:
@@ -183,7 +191,8 @@ class Pipeline:
         }
         if self.conn is not None:
             db.upsert_article(self.conn, aid=aid, journal_id=jid,
-                              canonical_url=canon, source_key=article.source_key)
+                              canonical_url=canon, source_key=article.source_key,
+                              origin=self.origin)
             snap_id = db.insert_article_snapshot(
                 self.conn, article_id=aid, content_hash=chash, fields=fields)
             if snap_id is not None:
