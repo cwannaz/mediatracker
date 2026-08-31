@@ -281,12 +281,25 @@ def ensure_schema(conn) -> None:
         CREATE INDEX IF NOT EXISTS archive_capture_journal_idx
             ON archive_capture (journal_slug, timestamp);
 
-        -- A capture the CDX index lists but the replay engine will not serve.
-        -- Recording the dead ones is what makes a resume cheap: without it the
-        -- todo list keeps them forever, and every restart grinds through the
-        -- same 404s before reaching anything fetchable.
-        ALTER TABLE archive_capture ADD COLUMN IF NOT EXISTS ok BOOLEAN NOT NULL DEFAULT TRUE;
         """)
+        # A capture the CDX index lists but the replay engine will not serve.
+        # Recording the dead ones is what makes a resume cheap: without it the
+        # todo list keeps them forever, and every restart grinds through the
+        # same 404s before reaching anything fetchable.
+        #
+        # Asked before it is added, rather than ADD COLUMN IF NOT EXISTS, which
+        # takes an AccessExclusiveLock even when the column is already there.
+        # Every leg runs this at startup, and on 2026-08-31 two legs started in
+        # the same second and deadlocked each other on exactly that lock --
+        # both died before fetching a page. The check costs nothing and the
+        # ALTER now runs once in the table's life.
+        cur.execute("""
+            SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'archive_capture' AND column_name = 'ok'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE archive_capture "
+                        "ADD COLUMN ok BOOLEAN NOT NULL DEFAULT TRUE")
 
 
 def already_done(conn) -> set[str]:
