@@ -340,15 +340,25 @@ def ingest(conn, *, slug: str, page: str, original: str, timestamp: str,
 
     for c in comments:
         key = c["source_id"]
-        cid = (ids.shared_comment_id(community, key) if shared
-               else ids.comment_id(slug, aid, key))
+        if key:
+            cid = (ids.shared_comment_id(community, key) if shared
+                   else ids.comment_id(slug, aid, key))
+        else:
+            # Some eras rendered no per-comment id at all — the PHP template
+            # before the abuse link appeared, partway through 2008. Identify
+            # those by content, exactly as the printed archive's comments are,
+            # so a second capture of the same thread recognises them instead
+            # of minting duplicates.
+            cid = ids.synthetic_comment_id(
+                aid, c.get("author_nick") or "",
+                str(c.get("posted_at") or ""), c["body_text"] or "")
         parent = None
         if c["parent_id"]:
             parent = (ids.shared_comment_id(community, c["parent_id"]) if shared
                       else ids.comment_id(slug, aid, c["parent_id"]))
         # The Drupal era is the only stretch that has an account key; the
         # Newsnetz reader leaves it absent rather than inventing one.
-        db.upsert_comment(conn, cid=cid, article_id=aid, source_key=key,
+        db.upsert_comment(conn, cid=cid, article_id=aid, source_key=key or None,
                           parent_id=parent, author_nick=c["author_nick"],
                           author_key=c.get("author_key"))
         stats.comments += 1

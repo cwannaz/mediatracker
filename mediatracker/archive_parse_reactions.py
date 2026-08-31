@@ -15,14 +15,17 @@ It is the best of the three eras for identity, and by some distance:
 a slug derived from the display name, so a rename moves it; a number does not
 move at all. If a commenter changes how they sign, the id still ties the two
 together — which is the one thing no amount of stylometry can establish on its
-own. On the page measured, all 172 comments carried one: this platform had no
-anonymous posting.
+own. Not every comment has one: on a March 2008 capture some names are bare
+`<strong>` with no profile link, so posting without an account was possible.
+The October template links every one. Absence of a key is a fact about that
+comment, not a parse failure.
 
-Structure is unusually kind. The template brackets every comment in
-`<!-- BEGIN COMMENT HTML -->` / `<!-- END COMMENT HTML -->`, so blocks need no
-guessing at boundaries, and `sign=` in the abuse link is unique per comment
-(172 distinct on that page) while `idContent=` is constant and identifies the
-article.
+The template brackets every comment in `<!-- BEGIN COMMENT HTML -->` /
+`<!-- END COMMENT HTML -->`, so blocks need no guessing at boundaries. The
+abuse link carries `sign=`, unique per comment, while `idContent=` is constant
+and names the article — but the abuse link only appears partway through 2008.
+Captures before it have no per-comment id whatsoever, and `source_id` comes
+back None so the caller can identify them by content instead.
 
 No reply threading and no like counts — like the Drupal era, and for the same
 reason: both are Newsnetz additions. Those fields come back None, not zero.
@@ -42,7 +45,9 @@ PAPER_TZ = ZoneInfo("Europe/Zurich")
 _BLOCK = re.compile(r"<!--\s*BEGIN COMMENT HTML\s*-->(.*?)<!--\s*END COMMENT HTML\s*-->", re.S | re.I)
 _UID = re.compile(r"idUser=(\d+)", re.I)
 _SIGN = re.compile(r"idContent=(\d+)&(?:amp;)?sign=(\d+)", re.I)
-_NICK = re.compile(r"par\s*<strong>\s*<a[^>]*>(.*?)</a>\s*</strong>", re.S | re.I)
+# The name is inside <strong>, wrapped in a profile link only when the writer
+# had an account. Both forms appear on the same page.
+_NICK = re.compile(r"par\s*<strong>\s*(?:<a[^>]*>)?(.*?)(?:</a>)?\s*</strong>", re.S | re.I)
 _BODY = re.compile(r'<div class="reaction_text">\s*<p>(.*?)</p>', re.S | re.I)
 _STAMP = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{1,2}):(\d{2})")
 _COUNT = re.compile(r'id="nbcomment"[^>]*>\s*<strong>\s*(\d+)\s*</strong>', re.I)
@@ -88,17 +93,22 @@ def parse_comments(page: str) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
     for chunk in (m.group(1) for m in _BLOCK.finditer(page)):
-        sign = _SIGN.search(chunk)
-        if not sign:
-            continue
-        cid = sign.group(2)
         body_m = _BODY.search(chunk)
         body = _text(body_m.group(1)) if body_m else ""
-        if not body or cid in seen:
+        if not body:
+            continue
+        # The abuse link, and with it the only per-comment id, arrives partway
+        # through 2008. Earlier captures carry no id at all, so those comments
+        # are identified downstream by their content the way the printed
+        # archive's are — refusing them would drop the first half of the year.
+        sign = _SIGN.search(chunk)
+        cid = sign.group(2) if sign else None
+        if cid and cid in seen:
             continue
         uid = _UID.search(chunk)
         nick = _NICK.search(chunk)
-        seen.add(cid)
+        if cid:
+            seen.add(cid)
         out.append({
             "source_id": cid,
             "author_key": uid.group(1) if uid else None,

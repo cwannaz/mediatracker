@@ -104,3 +104,58 @@ def test_the_three_eras_are_told_apart():
     assert rx.looks_like_reactions(PAGE)
     assert not lmo.looks_like_lmo(PAGE)
     assert not ap.looks_like_newsnetz(PAGE)
+
+
+# The March 2008 template: no abuse link, so no per-comment id at all, and the
+# name is a bare <strong> when the writer had no account. Verbatim from the
+# 2008-03-18 capture of la-greve-se-poursuit-a-bellinzone_9-117159.
+EARLY = """
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1"></head>
+<body>
+<div class="liencomments"><a id="texteliencomments" href="#Commentaires"><strong>14 commentaires</strong></a></div>
+<em id="nbcomment" class="commentaires"><strong>14</strong> commentaires</em>
+<!-- BEGIN COMMENT HTML -->
+<div class="reaction">
+  <div class="reaction_vignette">
+    <img src="/multimedia/images/img_structures/lmo_thumbprofil_defaut.gif">
+  </div>
+  <div class="reaction_text"><p>Swissmetal, Construction, CFF. Un fait est &eacute;tabli.</p></div>
+  <p class="reaction_date"><small>18.03.2008 - 15:24 par <strong>Jerry Jerry</strong></small></p>
+</div>
+<!-- END COMMENT HTML -->
+<!-- BEGIN COMMENT HTML -->
+<div class="reaction">
+  <div class="reaction_vignette">
+    <a href="/membership/ma_page.php?idUser=249271"><img src="/x.gif"></a>
+  </div>
+  <div class="reaction_text"><p>tssss, encore un pauvre malheureux.</p></div>
+  <p class="reaction_date"><small>17.03.2008 - 21:10 par <strong><a href="/membership/ma_page.php?idUser=249271">Yguano</a></strong></small></p>
+</div>
+<!-- END COMMENT HTML -->
+</body></html>
+"""
+
+
+def test_the_earlier_template_has_no_comment_id_and_is_kept_anyway():
+    # The abuse link, and with it the only per-comment id, arrives partway
+    # through 2008. Requiring it dropped every comment before that — 28
+    # captures fetched, 28 empty. source_id is None and the caller identifies
+    # the comment by content, as it already does for the printed archive.
+    cs = rx.parse_comments(EARLY)
+    assert len(cs) == 2
+    assert all(c["source_id"] is None for c in cs)
+    assert cs[0]["body_text"].startswith("Swissmetal")
+
+
+def test_a_writer_without_an_account_still_has_a_name():
+    # Some names are a bare <strong> with no profile link, so posting without
+    # an account was possible. A missing key is a fact about that comment.
+    cs = rx.parse_comments(EARLY)
+    assert cs[0]["author_nick"] == "Jerry Jerry" and cs[0]["author_key"] is None
+    assert cs[1]["author_nick"] == "Yguano" and cs[1]["author_key"] == "249271"
+
+
+def test_the_later_template_still_keeps_its_real_ids():
+    # Widening for the earlier template must not lose the id where one exists.
+    cs = rx.parse_comments(PAGE)
+    assert [c["source_id"] for c in cs] == ["271152", "271160"]

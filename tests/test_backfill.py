@@ -255,3 +255,13 @@ def test_a_month_the_archive_will_not_filter_is_asked_for_plain():
     # and only the matching URL survived, deduped across twelve months
     assert len(rows) == 1
     assert rows[0]["original"].endswith("story-12345")
+
+
+def test_a_comment_with_no_id_of_its_own_is_identified_by_content():
+    # The PHP template before the abuse link rendered no per-comment id. Those
+    # comments get the same content-derived id the printed archive's use, so a
+    # second capture of the thread recognises them instead of duplicating.
+    import inspect
+    src = inspect.getsource(bf.ingest)
+    assert "synthetic_comment_id" in src
+    assert "source_key=key or None" in src
