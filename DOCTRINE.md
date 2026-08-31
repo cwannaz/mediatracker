@@ -151,19 +151,30 @@ must keep being true.
 Factiva — indexes what the newsroom published, not what the public wrote
 underneath. See `SOURCES-BACKLOG.md`.
 
-### The corpus spans two platforms, and only one of them had accounts (2026-08-30)
+### The corpus spans three platforms, and identity gets worse over time (2026-08-30)
 
 The recoverable past is not one era but two, and they differ in what they can
 be asked:
 
+* **PHP "reactions", from somewhere in 2008 to about 2009.** Thread inline on
+  the article page, unpaginated, each comment bracketed in
+  `<!-- BEGIN/END COMMENT HTML -->`. Every comment names a **numeric `idUser`**.
+  This is the sturdiest identity in the corpus: a number does not move when the
+  display name does, so it can confirm a rename outright. The URL carries the
+  section before the id — `/fr/actu/economie/<slug>_11-271110` — and the grammar
+  appears part-way through 2008, not in January. **Pages are `charset=iso-8859-1`**.
 * **Drupal, roughly 2009 to March 2012.** The article page carries the whole
   thread inline; the URL is a slug with the id glued on the end. Every comment
   names `/users/<key>`, a real account identifier, with the display form beside
-  it — `MountaiDiver` posting from `/users/mountaidiver`. No reply threading,
-  no like counts.
+  it — `MountaiDiver` posting from `/users/mountaidiver`. The key is derived
+  from the display name, so a rename moves it: weaker than a number, far better
+  than nothing. No reply threading, no like counts.
 * **Newsnetz, March 2012 to about 2017.** The thread lives at `?comments=1`.
   Reply threading survives in an HTML comment, and likes and dislikes are
   counted. **No user id of any kind.**
+
+The direction is one way: a numeric id, then a name-derived slug, then
+nothing. The further back the material, the more it can settle.
 
 So identity is a different question on either side of March 2012. Before it,
 two comments can be tied to one account outright. After it, a nickname is all
@@ -181,7 +192,15 @@ era the answer stands on.
 
 Which reader parses a page is decided by the markup, never by the capture year:
 the changeover was a deployment, and captures from the same week fall either
-side of it.
+side of it. Order the tests carefully — `class="commentaire` is a prefix of the
+PHP era's `class="commentaires"`, so the loose Drupal test claims every 2008
+page, and the wrong reader returns an empty thread rather than an error.
+
+**Encoding is part of the era, not a detail.** The socket timeout measures
+inactivity and `errors="replace"` does not raise: both are silent failures that
+produce plausible-looking output. A listing that dribbles forever and a page
+whose every accent became `\ufffd` each cost a day before being noticed. Where a
+failure cannot announce itself, put a clock or a declaration in its way.
 
 ### What a hand writes lives outside what a pass rewrites (2026-08-27)
 
