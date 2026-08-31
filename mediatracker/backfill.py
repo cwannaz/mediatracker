@@ -196,14 +196,29 @@ def cdx_by_month(client: WaybackClient, domain: str, *, kind: str,
     for month in range(1, 13):
         last = calendar.monthrange(year, month)[1]
         frm, to = f"{year}{month:02d}01", f"{year}{month:02d}{last:02d}"
+        pattern = KINDS[kind]["filter"]
         try:
-            rows = client.cdx(domain, frm=frm, to=to,
-                              url_filter=KINDS[kind]["filter"])
+            rows = client.cdx(domain, frm=frm, to=to, url_filter=pattern)
         except Exception as exc:
-            log.warning("[%s %s %d-%02d] month failed: %s: %s",
-                        domain, kind, year, month, type(exc).__name__, exc)
-            missed.append(month)
-            continue
+            # A server-side `filter=` makes the archive scan every capture in
+            # the span, and under load that is the query it answers by
+            # dribbling. Asking for the month plain is an index range scan —
+            # a bigger response, but one it actually finishes — so the same
+            # regex is applied here instead.
+            log.warning("[%s %s %d-%02d] filtered query failed (%s); "
+                        "retrying unfiltered",
+                        domain, kind, year, month, type(exc).__name__)
+            try:
+                raw = client.cdx(domain, frm=frm, to=to)
+            except Exception as exc2:
+                log.warning("[%s %s %d-%02d] month failed: %s: %s",
+                            domain, kind, year, month, type(exc2).__name__, exc2)
+                missed.append(month)
+                continue
+            keep = re.compile(pattern)
+            rows = [r for r in raw if keep.fullmatch(r.get("original", ""))]
+            log.info("[%s %s %d-%02d] unfiltered fallback: %d of %d match",
+                     domain, kind, year, month, len(rows), len(raw))
         for r in rows:
             key = (r.get("timestamp"), r.get("original"))
             if key not in seen:

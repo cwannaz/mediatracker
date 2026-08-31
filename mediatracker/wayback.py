@@ -68,6 +68,11 @@ class WaybackClient:
     # holding connections open rather than by refusing outright. Spending 98
     # seconds discovering that costs more than the page is worth.
     snapshot_timeout: float = 30.0
+    # A hard ceiling on ONE response, start to finish. The socket timeout
+    # only measures inactivity, so a response that trickles a byte at a
+    # time never trips it — which is how two listings hung for half an
+    # hour today without raising. This is the clock that does not reset.
+    total_budget: float = 300.0
     max_retries: int = 5
     snapshot_retries: int = 1
     backoff_base: float = 8.0       # first retry waits this long, then doubles
@@ -91,7 +96,7 @@ class WaybackClient:
             self.sleep_seconds += naptime
 
     def get(self, url: str, *, timeout: float | None = None,
-            retries: int | None = None) -> bytes:
+            retries: int | None = None, budget: float | None = None) -> bytes:
         """One GET, paced and retried. Raises GaveUp when the archive has been
         failing long enough that continuing would just be rude."""
         timeout = timeout or self.timeout
@@ -104,7 +109,7 @@ class WaybackClient:
             })
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    raw = resp.read()
+                    raw = _read_within(resp, budget or self.total_budget)
                     enc = (resp.headers.get("content-encoding") or "").lower()
                 self._last_request = time.monotonic()
                 if enc == "gzip":
@@ -229,6 +234,31 @@ def decode(raw: bytes) -> str:
         # Undeclared and not UTF-8: cp1252 is the only other thing these
         # servers ever sent, and it cannot itself fail.
         return raw.decode("cp1252", errors="replace")
+
+
+class ReadTimeout(TimeoutError):
+    """A response that began but would not finish inside its budget."""
+
+
+def _read_within(resp, budget: float) -> bytes:
+    """Read a response with a ceiling on total elapsed time, not idle time.
+
+    `urlopen(timeout=...)` arms an inactivity timer: every byte that arrives
+    resets it. The archive under load answers a heavy listing by dribbling,
+    which satisfies that timer indefinitely. Two legs were lost to it in one
+    day, each hanging around half an hour and never raising, so the retry and
+    fallback paths above them never ran. Reading in chunks against a wall
+    clock is what turns that silence into an error something can act on.
+    """
+    chunks = []
+    deadline = time.monotonic() + budget
+    while True:
+        if time.monotonic() > deadline:
+            raise ReadTimeout(f"response still arriving after {budget:.0f}s")
+        chunk = resp.read(65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
 
 
 def stats(client: WaybackClient) -> dict:

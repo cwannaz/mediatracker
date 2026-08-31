@@ -200,14 +200,18 @@ def test_a_year_is_asked_for_a_month_at_a_time():
         def cdx(self, domain, *, frm=None, to=None, url_filter=None, **kw):
             calls.append((frm, to))
             if frm.endswith("0201"):
+                # February refuses both the filtered query and the plain one
                 raise RuntimeError("archive said 504")
-            return [{"timestamp": frm + "000000", "original": f"http://x/{frm}"}]
+            return [{"timestamp": frm + "000000",
+                     "original": f"http://x/story-{frm}"}]
 
     rows = bf.cdx_by_month(FakeClient(), "lematin.ch", kind="lmo", year=2010)
-    assert len(calls) == 12
+    # twelve months, and February asked twice: filtered, then plain
+    assert len(calls) == 13
     assert calls[0] == ("20100101", "20100131")
     assert calls[1] == ("20100201", "20100228")      # 2010 is not a leap year
-    # a failed month costs a month, not the leg
+    assert calls[2] == ("20100201", "20100228")      # the unfiltered retry
+    # a month that refuses both ways costs a month, not the leg
     assert len(rows) == 11
 
 
@@ -229,3 +233,25 @@ def test_the_same_capture_seen_in_two_months_is_kept_once():
 
     rows = bf.cdx_by_month(FakeClient(), "lematin.ch", kind="lmo", year=2010)
     assert len(rows) == 1
+
+
+def test_a_month_the_archive_will_not_filter_is_asked_for_plain():
+    # A server-side filter= makes the archive scan every capture in the span,
+    # and under load that is the query it answers by dribbling. Asked plain it
+    # does an index range scan and finishes, so the regex is applied here.
+    seen = []
+
+    class FakeClient:
+        def cdx(self, domain, *, frm=None, to=None, url_filter=None, **kw):
+            seen.append(url_filter)
+            if url_filter is not None:
+                raise TimeoutError("still arriving")
+            return [{"timestamp": "1", "original": "http://x.ch/a/story-12345"},
+                    {"timestamp": "2", "original": "http://x.ch/section/"}]
+
+    rows = bf.cdx_by_month(FakeClient(), "x.ch", kind="lmo", year=2010)
+    # tried filtered first, fell back to plain
+    assert seen[0] == bf.KINDS["lmo"]["filter"] and seen[1] is None
+    # and only the matching URL survived, deduped across twelve months
+    assert len(rows) == 1
+    assert rows[0]["original"].endswith("story-12345")
