@@ -203,6 +203,14 @@ be asked:
 The direction is one way: a numeric id, then a name-derived slug, then
 nothing. The further back the material, the more it can settle.
 
+**And the layers are Le Matin's alone.** Asked for the same two grammars, 24
+heures and the Tribune return single digits or zero for every year — measured
+across all thirteen legs on 2026-08-31. Their recoverable history begins with
+Newsnetz in 2012. So the corpus is not three parallel histories of different
+depth; it is one deep history and two shallow ones, and a measure that needs
+pre-2012 material from all three titles cannot be built at any amount of
+fetching.
+
 So identity is a different question on either side of March 2012. Before it,
 two comments can be tied to one account outright. After it, a nickname is all
 there is, and every claim that two handles are one writer is an inference from
