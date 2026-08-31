@@ -166,7 +166,8 @@ def newest_per_article(rows: list[dict]) -> list[dict]:
 
 
 def cdx_cached(client: WaybackClient, domain: str, *, kind: str, year: int,
-               cache_dir: Path | None = None) -> list[dict]:
+               cache_dir: Path | None = None,
+               pattern: str | None = None) -> list[dict]:
     """Enumerate a leg, remembering the answer.
 
     A CDX query for one year takes the better part of a minute and returns the
@@ -182,13 +183,13 @@ def cdx_cached(client: WaybackClient, domain: str, *, kind: str, year: int,
             return json.loads(path.read_text())
         except ValueError:
             log.warning("unreadable cdx cache %s; re-querying", path)
-    rows = cdx_by_month(client, domain, kind=kind, year=year)
+    rows = cdx_by_month(client, domain, kind=kind, year=year, pattern=pattern)
     path.write_text(json.dumps(rows))
     return rows
 
 
 def cdx_by_month(client: WaybackClient, domain: str, *, kind: str,
-                 year: int) -> list[dict]:
+                 year: int, pattern: str | None = None) -> list[dict]:
     """One year of listings, asked for a month at a time.
 
     A whole-year query against a busy domain is the shape the search API
@@ -196,6 +197,11 @@ def cdx_by_month(client: WaybackClient, domain: str, *, kind: str,
     timeout measures inactivity the call can hang for half an hour without
     raising. Twelve small queries come back. They also fail independently, so
     a bad month costs a month instead of the leg.
+
+    `pattern` overrides the kind's own filter. It is how a caller that is not
+    after HTML — the counter endpoint, whose captures must never reach the
+    article parsers — reuses this enumeration and its cache without earning a
+    place in KINDS, where backfill_cli would offer it as a fetchable kind.
     """
     out: list[dict] = []
     seen: set[tuple] = set()
@@ -203,9 +209,9 @@ def cdx_by_month(client: WaybackClient, domain: str, *, kind: str,
     for month in range(1, 13):
         last = calendar.monthrange(year, month)[1]
         frm, to = f"{year}{month:02d}01", f"{year}{month:02d}{last:02d}"
-        pattern = KINDS[kind]["filter"]
+        rx_filter = pattern or KINDS[kind]["filter"]
         try:
-            rows = client.cdx(domain, frm=frm, to=to, url_filter=pattern)
+            rows = client.cdx(domain, frm=frm, to=to, url_filter=rx_filter)
         except Exception as exc:
             # A server-side `filter=` makes the archive scan every capture in
             # the span, and under load that is the query it answers by
@@ -222,7 +228,7 @@ def cdx_by_month(client: WaybackClient, domain: str, *, kind: str,
                             domain, kind, year, month, type(exc2).__name__, exc2)
                 missed.append(month)
                 continue
-            keep = re.compile(pattern)
+            keep = re.compile(rx_filter)
             rows = [r for r in raw if keep.fullmatch(r.get("original", ""))]
             log.info("[%s %s %d-%02d] unfiltered fallback: %d of %d match",
                      domain, kind, year, month, len(rows), len(raw))
