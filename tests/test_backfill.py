@@ -276,12 +276,23 @@ def test_the_publishers_own_back_catalogue_never_joins_the_rescan_list():
     assert "sitemap" in db.ARCHIVE_ORIGINS
 
 
-def test_the_years_with_no_public_are_not_fetched():
-    # Comments were switched off 2017-2020: the archive holds no captures,
-    # sampled pages report commentingEnabled false with a zero count across 32
-    # articles, and Cedric's own printouts stop in 2015 and resume in 2021.
-    # Articles exist for those years; a commenting public does not.
+def test_this_route_covers_only_the_current_comment_platform():
+    # 2017-2020 DID have comments (Cedric was reading them); they were rendered
+    # by JavaScript from another database and were never migrated into the
+    # platform whose API this route reads. Excluded because unreachable HERE,
+    # not because they are absent — the distinction decides whether anyone
+    # goes looking for them.
     from mediatracker import sitemap_backfill as sb
-    for dead in (2017, 2018, 2019, 2020):
-        assert dead not in sb.YEARS_WITH_COMMENTS
-    assert 2021 in sb.YEARS_WITH_COMMENTS and 2026 in sb.YEARS_WITH_COMMENTS
+    for elsewhere in (2017, 2018, 2019, 2020):
+        assert elsewhere not in sb.YEARS_ON_CURRENT_PLATFORM
+    assert 2021 in sb.YEARS_ON_CURRENT_PLATFORM
+
+
+def test_the_thread_leg_reaches_the_years_that_looked_dark():
+    # 2017-2020 was called dark on the strength of a range that stopped at
+    # 2017, so the one URL form that could have answered was never asked for.
+    # Newsnetz was still serving ?comments=1 in 2020; only the crawler lost
+    # interest. Captures are thin there, and thin is not nothing.
+    yrs = bf.KINDS["threads"]["years"]
+    for y in (2017, 2018, 2019, 2020, 2021):
+        assert y in yrs

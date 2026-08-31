@@ -18,12 +18,18 @@ does not close the *evidence* problem, and the difference matters:
     why this origin sits in `db.ARCHIVE_ORIGINS` and never joins the rescan
     work-list.
 
-**Comments were switched off between 2017 and 2020.** Three independent lines
-agree: the archive holds no captures, sampled pages of those years report
-`commentingEnabled` false and a zero count across 32 articles, and Cedric's own
-printed archive — the record of someone who was commenting throughout — stops
-in 2015 and resumes in 2021. So those four years have articles and no public,
-and the run is ordered to reach 2021 onward first.
+**2017-2020 had comments; they are simply not in the HTML.** I first read the
+evidence as the paper having closed commenting, and Cedric corrected it: he was
+reading those threads at the time, and the gap in his printed archive is a gap
+in his printing, not in the public. The mechanism was different — comments
+rendered by JavaScript from a live database rather than served in the page — so
+an archive capture holds an empty container, and today's article page reports
+zero because the count it prints belongs to the *current* comment system, which
+those comments were never migrated into. Recovering them means finding the
+system that held them, not fetching more pages.
+
+The run starts at 2021 because that is where the present platform's own data
+begins, not because the earlier years are empty.
 
 Pace is deliberately slower than the daily scan's. The daemon is already
 talking to this host, and this job has a quarter of a million pages to get
@@ -42,10 +48,12 @@ SITEMAP_DIR = Path("/mnt/storage/Projects/MediaTracker/sitemaps")
 _LOC = re.compile(r"<loc>([^<]+)</loc>")
 _DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.xml$")
 
-# The years the paper ran comments. 2016 is included because the Newsnetz
-# platform was still serving threads into January of it, and 2017-2020 are
-# excluded because there is nothing there to find.
-YEARS_WITH_COMMENTS = tuple(range(2021, 2027))
+# The years the CURRENT comment platform holds. 2017-2020 are excluded from
+# this route only because their comments live somewhere this route cannot
+# reach — a JavaScript widget backed by another database — not because they do
+# not exist. See the module docstring; finding that system is open work.
+YEARS_ON_CURRENT_PLATFORM = tuple(range(2021, 2027))
+YEARS_WITH_COMMENTS = YEARS_ON_CURRENT_PLATFORM
 
 
 def day_files(slug: str = "lematin", years: tuple[int, ...] | None = None) -> list[Path]:

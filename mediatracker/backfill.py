@@ -52,7 +52,14 @@ KINDS: dict[str, dict] = {
     # The prize: server-rendered threads, whole.
     "threads": {
         "filter": r".*comments=1.*",
-        "years": range(2006, 2018),
+        # Through 2021, not 2017. The range used to stop at 2017 and that alone
+        # is why 2017-2020 was reported dark: Newsnetz was still running in
+        # 2020 — an archived article of that year still loads files.newsnetz.ch
+        # and still has the empty commentsBox that ?comments=1 fills — so the
+        # read path never changed, only the crawler's interest in it. The
+        # captures thin out sharply (2016: ~11,700, 2017: 56), but fragments of
+        # a year nobody has any words from are worth the asking.
+        "years": range(2006, 2022),
         "what": "Newsnetz thread pages (?comments=1)",
     },
     # Its successor pattern, barely crawled but free to try.
