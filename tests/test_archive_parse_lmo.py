@@ -92,3 +92,14 @@ def test_the_two_eras_are_told_apart():
     assert lmo.looks_like_lmo(PAGE)
     from mediatracker import archive_parse as ap
     assert not ap.looks_like_newsnetz(PAGE)
+
+
+def test_the_php_era_is_not_claimed_as_drupal():
+    # The PHP era labels its count class="commentaires", and class="commentaire
+    # is a prefix of it — so the obvious marker claims every 2008 page as
+    # Drupal and the wrong reader returns nothing.
+    php = ('<em id="nbcomment" class="commentaires"><strong>172</strong> commentaires</em>'
+           '<div class="reaction"><div class="reaction_text"><p>x</p></div></div>')
+    assert not lmo.looks_like_lmo(php)
+    from mediatracker import archive_parse_reactions as rx
+    assert rx.looks_like_reactions(php)

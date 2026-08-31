@@ -36,6 +36,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from . import archive_parse as ap
 from . import archive_parse_lmo as lmo
+from . import archive_parse_reactions as rx
 from . import db, ids, sources
 from .config import load_config
 from .wayback import GaveUp, WaybackClient
@@ -67,6 +68,15 @@ KINDS: dict[str, dict] = {
         "filter": r".*-[0-9]{5,}$",
         "years": range(2009, 2013),
         "what": "Drupal-era article pages, thread inline (has account keys)",
+    },
+    # Older still: the PHP CMS, whose article URLs carry the section before the
+    # id — /fr/actu/economie/<slug>_11-271110. Threads ran to 172 and 196
+    # comments, and every one names a NUMERIC idUser, the sturdiest identity
+    # anchor anywhere in the corpus.
+    "reactions": {
+        "filter": r".*_[0-9]+-[0-9]{5,}$",
+        "years": range(2006, 2010),
+        "what": "PHP-era article pages, thread inline (has numeric user ids)",
     },
     # Article pages: headline, byline, thread SIZE, and a two-comment preview
     # that the template renders even when the thread page was never captured.
@@ -248,7 +258,12 @@ def ingest(conn, *, slug: str, page: str, original: str, timestamp: str,
     # Which stack rendered this page decides which reader can read it. The
     # markup is asked, not the year: the changeover was a deployment, and a
     # capture taken days either side of it carries whichever it carries.
-    reader = lmo if lmo.looks_like_lmo(page) else ap
+    if rx.looks_like_reactions(page):
+        reader = rx
+    elif lmo.looks_like_lmo(page):
+        reader = lmo
+    else:
+        reader = ap
     art = reader.parse_article(page, original)
     comments = reader.parse_comments(page)
 

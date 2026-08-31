@@ -159,3 +159,32 @@ def test_the_drupal_era_is_a_leg_the_runner_knows_about():
     spec = bf.KINDS["lmo"]
     assert 2009 in spec["years"] and 2012 in spec["years"]
     assert 2013 not in spec["years"]      # Newsnetz by then
+
+
+def test_a_latin1_page_is_not_read_as_utf8():
+    # The pre-2009 pages declare charset=iso-8859-1 and mean it. Decoded as
+    # UTF-8 every accent becomes a replacement character, silently, because
+    # errors="replace" does not raise — and the accent measures are exactly
+    # what the profiling pass reads.
+    from mediatracker.wayback import decode
+    raw = ('<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">'
+           'bonus encaiss\xe9s \xe0 Gen\xe8ve').encode("cp1252")
+    assert "encaissés à Genève" in decode(raw)
+    # a page that says nothing and is valid UTF-8 stays UTF-8
+    assert decode("recommandé".encode("utf-8")) == "recommandé"
+
+
+def test_the_php_era_is_a_leg_the_runner_knows_about():
+    spec = bf.KINDS["reactions"]
+    assert 2008 in spec["years"] and 2006 in spec["years"]
+    assert 2010 not in spec["years"]        # Drupal by then
+    # the section-before-id URL grammar the fetcher must accept
+    assert bf.worth_fetching(
+        "http://www.lematin.ch/fr/actu/economie/6-milliards-de-cadeau-pour-ubs_11-271110")
+
+
+def test_the_reader_is_chosen_among_three_eras():
+    import inspect
+    src = inspect.getsource(bf.ingest)
+    assert "looks_like_reactions(page)" in src
+    assert "looks_like_lmo(page)" in src

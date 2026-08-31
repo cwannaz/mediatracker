@@ -83,8 +83,14 @@ def parse_timestamp(raw: str | None) -> datetime | None:
 
 
 def looks_like_lmo(page: str) -> bool:
-    """Is this the Drupal era rather than Newsnetz?"""
-    return bool(re.search(r'class="commentaire|comments_titre|themes/lmo/', page, re.I))
+    """Is this the Drupal era rather than Newsnetz or the PHP era before it?
+
+    Deliberately does NOT test `class="commentaire`: the PHP era labels its
+    count `class="commentaires"`, and the shorter string is a prefix of the
+    longer one, so that test claims every 2008 page as Drupal. Each marker
+    here belongs to this stack alone.
+    """
+    return bool(re.search(r'comments_titre|id="comment-\d|themes/lmo/', page, re.I))
 
 
 def _body_of(chunk: str) -> str:

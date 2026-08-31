@@ -24,6 +24,7 @@ from __future__ import annotations
 import gzip
 import http.client
 import logging
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -187,7 +188,38 @@ class WaybackClient:
         """
         raw = self.get(f"{WEB_ENDPOINT}/{timestamp}id_/{original}",
                        timeout=self.snapshot_timeout, retries=self.snapshot_retries)
-        return raw.decode("utf-8", errors="replace")
+        return decode(raw)
+
+
+_CHARSET = re.compile(rb"""charset\s*=\s*["']?\s*([A-Za-z0-9_.:-]+)""", re.I)
+_LATIN = {"iso-8859-1", "iso8859-1", "latin-1", "latin1", "windows-1252", "cp1252"}
+
+
+def decode(raw: bytes) -> str:
+    """Text of a captured page, in whatever the page was actually written in.
+
+    Not every era of these sites was UTF-8. The pre-2009 PHP pages declare
+    `charset=iso-8859-1` and mean it, and decoding those as UTF-8 turns every
+    accent into a replacement character — silently, because errors="replace"
+    does not raise. That corrupts exactly the accent measures the profiling
+    pass reads, so the encoding is taken from the page's own declaration and
+    only guessed when it makes none.
+    """
+    m = _CHARSET.search(raw[:4096])
+    if m:
+        name = m.group(1).decode("ascii", "replace").strip().lower()
+        if name in _LATIN:
+            return raw.decode("cp1252", errors="replace")
+        try:
+            return raw.decode(name)
+        except (LookupError, UnicodeDecodeError):
+            pass
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # Undeclared and not UTF-8: cp1252 is the only other thing these
+        # servers ever sent, and it cannot itself fail.
+        return raw.decode("cp1252", errors="replace")
 
 
 def stats(client: WaybackClient) -> dict:
