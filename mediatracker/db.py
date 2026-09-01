@@ -779,7 +779,14 @@ def browse_articles(conn, *, q: str | None = None, journals: list[str] | None = 
                s.published_at, s.id AS snapshot_id,
                -- Prefer the number of comments actually stored; fall back to the
                -- count the page announced (the live site does not expose one).
-               COALESCE(cc.n, s.comment_count) AS comment_count
+               COALESCE(cc.n, s.comment_count) AS comment_count,
+               -- ...and say which of the two this is. A counts-only row was
+               -- read off an archived counter widget for a year whose threads
+               -- are gone: it means "three people commented and we hold none
+               -- of them", not "we hold three". Without this flag the two are
+               -- indistinguishable in the list, and an empty thread behind a
+               -- count reads as a scraping failure rather than a lost public.
+               COALESCE((s.raw_meta->>'counts_only')::boolean, false) AS counts_only
         FROM article a
         JOIN journal j ON j.id = a.journal_id
         LEFT JOIN article_snapshot s ON s.article_id = a.id
@@ -868,6 +875,10 @@ def get_article(conn, article_id: str, snapshot_id: int | None = None) -> dict |
             ORDER BY c.id, cs.fetched_at DESC
         """, (article_id,))
         art["comments"] = sorted(_rows(cur), key=lambda c: (c["posted_at"] is None, c["posted_at"]))
+        # Surfaced at the top level so a caller need not dig through raw_meta
+        # to learn that this article's empty thread is unrecoverable rather
+        # than genuinely empty.
+        art["counts_only"] = bool((art.get("raw_meta") or {}).get("counts_only"))
         return art
 
 
