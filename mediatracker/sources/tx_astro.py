@@ -519,13 +519,24 @@ class TxAstroSource(Source):
     comment_system = "native"
 
     # 24 heures and the Tribune de Genève are two front-ends over one content
-    # pool AND one comment backend: the same article id on both sites returns
-    # the same thread, comment UUIDs included. They are therefore one community
-    # of commenters, not two — verified by fetching one article's thread from
-    # both hosts and getting identical ids and nicknames back.
+    # pool and one comment backend, and one community of commenters — but NOT
+    # one thread. This comment used to claim the same article returns the same
+    # thread with identical UUIDs "verified by fetching one article from both
+    # hosts". Measured across the corpus, that is false: story 108329840700
+    # carries five comments on 24 heures and three on the Tribune with **zero
+    # UUIDs in common** and no nickname shared between them, and the same
+    # split holds in the Newsnetz era (story 10053208: eight and two). Each
+    # title hosts its own conversation about the shared article.
+    #
+    # What makes them one community is the readers, not the threads: **33.6%
+    # of modern-era nicknames write on both titles** (1,247 of 3,706), which is
+    # what a shared sign-up looks like. So identity is pooled and volume is
+    # not — a story published by both papers has two threads, and its
+    # discussion is the sum, with neither half standing for the whole.
     community = "tx-romandie"
-    # Those ids are UUIDs, unique across the whole backend, so a comment seen
-    # through either title is one row rather than one per title.
+    # UUIDs, unique across the backend. This no longer does any de-duplicating
+    # (there is no syndicated thread to collapse), but it stays true and it is
+    # what keeps one commenter's id stable if the titles are ever merged.
     comment_ids_global = True
 
     # Section fronts crawled alongside the homepage. The homepage surfaces the
