@@ -31,6 +31,15 @@ system that held them, not fetching more pages.
 The run starts at 2021 because that is where the present platform's own data
 begins, not because the earlier years are empty.
 
+**The sisters publish one too, and in a different shape.** 24 heures and the
+Tribune name a few hundred sub-sitemaps by opaque hash instead of one file per
+day, each holding up to ~2,000 URLs and spanning weeks or years; only the
+`<lastmod>` on each record says when. 24 heures mirrors to 424,672 URLs running
+2011-2026 — the same order as Le Matin. That matters because the archive route
+for those two titles is thin and stops dead at 2016, which is the only reason
+cross-title comparison has been bounded to 2012-2016. The bound is the
+archive's, not the corpus's.
+
 Pace is deliberately slower than the daily scan's. The daemon is already
 talking to this host, and this job has a quarter of a million pages to get
 through; there is no version of that which should be hurried.
@@ -47,6 +56,10 @@ log = logging.getLogger(__name__)
 SITEMAP_DIR = Path("/mnt/storage/Projects/MediaTracker/sitemaps")
 _LOC = re.compile(r"<loc>([^<]+)</loc>")
 _DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.xml$")
+# One <url> record, from which both the address and its date are read. The
+# sisters need this; Le Matin does not, because its filename IS the date.
+_ENTRY = re.compile(r"<url>(.*?)</url>", re.S)
+_LASTMOD = re.compile(r"<lastmod>(\d{4}-\d{2}-\d{2})")
 
 # The years the CURRENT comment platform holds. 2017-2020 are excluded from
 # this route only because their comments live somewhere this route cannot
@@ -68,6 +81,79 @@ def day_files(slug: str = "lematin", years: tuple[int, ...] | None = None) -> li
             continue
         out.append(p)
     return sorted(out, reverse=True)
+
+
+def entries_in(path: Path) -> list[tuple[str, str | None]]:
+    """(url, YYYY-MM-DD) for one sitemap, the date from its own <lastmod>.
+
+    24 heures and the Tribune publish a few hundred sub-sitemaps under opaque
+    hashed names rather than one file per day, each spanning weeks or years,
+    so for them the filename says nothing and only the record carries a date.
+    A record without one keeps None: undated is not the same as unknown-year,
+    and pretending otherwise would file it under whichever year we guessed.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        log.warning("unreadable sitemap %s: %s", path, exc)
+        return []
+    out = []
+    for block in _ENTRY.findall(raw):
+        loc = _LOC.search(block)
+        if not loc:
+            continue
+        mod = _LASTMOD.search(block)
+        out.append((loc.group(1), mod.group(1) if mod else None))
+    return out
+
+
+def hashed_files(slug: str) -> list[Path]:
+    """Sub-sitemaps that are not named for a day. `_`-prefixed files are ours."""
+    root = SITEMAP_DIR / slug
+    return sorted(p for p in root.glob("*.xml")
+                  if not p.name.startswith("_") and not _DAY.match(p.name))
+
+
+def day_index(slug: str) -> Path:
+    """A date-sorted `day<TAB>url` index over a hashed mirror, built once.
+
+    Sorting 400,000 records newest-first means reading every sub-sitemap, which
+    is slow enough to be worth doing once rather than on every resume. Rebuilt
+    whenever a sub-sitemap is newer than the index, so a re-mirrored title is
+    picked up without anyone remembering to say so.
+    """
+    root = SITEMAP_DIR / slug
+    idx = root / "_bydate.tsv"
+    files = hashed_files(slug)
+    if idx.exists() and files and idx.stat().st_mtime >= max(f.stat().st_mtime for f in files):
+        return idx
+    rows: list[tuple[str, str | None]] = []
+    for f in files:
+        rows.extend(entries_in(f))
+    # Undated records sort last rather than being dropped: they are still real
+    # articles, and a year filter will pass over them on its own.
+    rows.sort(key=lambda r: r[1] or "", reverse=True)
+    idx.write_text("".join(f"{d or ''}\t{u}\n" for u, d in rows), encoding="utf-8")
+    log.info("[%s] built day index: %d urls across %d sub-sitemaps",
+             slug, len(rows), len(files))
+    return idx
+
+
+def iter_entries(slug: str, years: tuple[int, ...] | None = None):
+    """(url, day) for a title, newest first, whichever layout it publishes."""
+    dated = day_files(slug, years)
+    if dated:
+        for path in dated:
+            for url in urls_in(path):
+                yield url, path.stem
+        return
+    for line in day_index(slug).read_text(encoding="utf-8").splitlines():
+        day, _, url = line.partition("\t")
+        if not url:
+            continue
+        if years and (not day or int(day[:4]) not in years):
+            continue
+        yield url, day or None
 
 
 def urls_in(path: Path) -> list[str]:
@@ -155,34 +241,37 @@ async def run(*, slug: str = "lematin", years: tuple[int, ...] = YEARS_WITH_COMM
     deadline = (time.monotonic() + max_hours * 3600) if max_hours else None
     done = skipped = failed = 0
 
+    last_day = None
     try:
-        for path in day_files(slug, years):
-            day = path.stem
-            for url in urls_in(path):
-                if url in seen:
-                    skipped += 1
-                    continue
-                if deadline and time.monotonic() > deadline:
-                    raise OutOfTime()
-                if limit and done >= limit:
-                    raise OutOfTime()
-                ok = True
-                try:
-                    await pipe._ingest_article(source, url, stats)
-                except Exception as exc:
-                    ok = False
-                    failed += 1
-                    log.warning("[%s] %s: %s", day, url[-60:], exc)
-                mark_seen(conn, url=url, slug=slug, day=day, ok=ok)
-                seen.add(url)
-                done += 1
-                if done % 25 == 0:
-                    conn.commit()
-                    log.info("[%s %s] %d fetched, %d skipped, %d failed | %s",
-                             slug, day, done, skipped, failed, stats.as_dict()
-                             if hasattr(stats, "as_dict") else stats)
-                time.sleep(delay)
-            conn.commit()
+        for url, day in iter_entries(slug, years):
+            # A day boundary is a natural commit point in either layout, and
+            # in the hashed one it is the only boundary there is.
+            if day != last_day:
+                conn.commit()
+                last_day = day
+            if url in seen:
+                skipped += 1
+                continue
+            if deadline and time.monotonic() > deadline:
+                raise OutOfTime()
+            if limit and done >= limit:
+                raise OutOfTime()
+            ok = True
+            try:
+                await pipe._ingest_article(source, url, stats)
+            except Exception as exc:
+                ok = False
+                failed += 1
+                log.warning("[%s] %s: %s", day, url[-60:], exc)
+            mark_seen(conn, url=url, slug=slug, day=day, ok=ok)
+            seen.add(url)
+            done += 1
+            if done % 25 == 0:
+                conn.commit()
+                log.info("[%s %s] %d fetched, %d skipped, %d failed | %s",
+                         slug, day, done, skipped, failed, stats.as_dict()
+                         if hasattr(stats, "as_dict") else stats)
+            time.sleep(delay)
     except OutOfTime:
         log.info("budget reached; progress recorded and resumable")
     finally:
