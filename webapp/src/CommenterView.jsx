@@ -3,7 +3,7 @@ import { languageMetrics } from './textmetrics.js'
 import ProfilePanel from './ProfilePanel.jsx'
 import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
-import ActivityTimeline, { useCorpusSpan } from './ActivityTimeline.jsx'
+import ActivityTimeline, { useCorpusSpan, useCoverage } from './ActivityTimeline.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -24,11 +24,15 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
     () => languageMetrics(withText.map((c) => c.body_text)), [data]) // eslint-disable-line
 
   const span = useCorpusSpan(send)
+  // Coverage for the titles this person writes in, not the whole corpus:
+  // a band drawn from a paper they never touched would say nothing about them.
+  const journals = useMemo(
+    () => [...new Set(comments.map((c) => c.journal).filter(Boolean))], [comments])
+  const coverage = useCoverage(send, journals)
 
   if (!data) return <><button className="backlink" onClick={onBack}>← Back</button><div className="empty">Loading…</div></>
 
   const dated = comments.filter((c) => c.posted_at)
-  const journals = [...new Set(comments.map((c) => c.journal))]
   const votes = comments.reduce((s, c) => s + (c.like_count || 0), 0)
 
   return (
@@ -57,7 +61,7 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
         </div>
       </div>
 
-      <ActivityTimeline comments={comments} span={span}
+      <ActivityTimeline comments={comments} span={span} coverage={coverage}
         title="Timeline — comments per month" />
 
       <div className="card">

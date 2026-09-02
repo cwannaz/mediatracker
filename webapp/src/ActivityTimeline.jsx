@@ -49,9 +49,10 @@ function axisTicks(months, want = 6) {
   return out
 }
 
-export default function ActivityTimeline({ comments, span, title, defaultSplit = false }) {
+export default function ActivityTimeline({ comments, span, title, coverage, defaultSplit = false }) {
   const [zoom, setZoom] = useState(false)
   const [split, setSplit] = useState(defaultSplit)
+  const [bands, setBands] = useState(true)
 
   // Per nickname, per month. Built once; both layouts read the same counts so
   // the two views can never disagree about a number.
@@ -74,6 +75,12 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
     return { nicks: order, byNick: per, own: [lo, hi] }
   }, [comments])
 
+  const cov = useMemo(() => {
+    const m = new Map()
+    for (const r of coverage || []) m.set(r.month, r)
+    return m
+  }, [coverage])
+
   const [corpusLo, corpusHi] = span || []
   const from = zoom || !corpusLo ? own[0] : monthOf(corpusLo)
   const to = zoom || !corpusHi ? own[1] : monthOf(corpusHi)
@@ -90,6 +97,36 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
   // comments, which is the comparison the layout exists to make.
   const lanePeak = Math.max(1, ...months.flatMap(
     (m) => nicks.map((n) => byNick.get(n).get(m) || 0)))
+
+  // One band per run of equally-shaded months, so a long uncovered stretch is
+  // a single wash rather than 40 abutting rectangles with seams between them.
+  const runs = useMemo(() => {
+    if (!bands || cov.size === 0) return []
+    const out = []
+    months.forEach((m, i) => {
+      const c = cov.get(m)
+      const shade = c === undefined ? UNKNOWN
+        : c.live ? 0
+          : c.coverage === null ? UNKNOWN
+            : 1 - c.coverage
+      if (shade <= 0.02) return
+      const last = out[out.length - 1]
+      if (last && last.to === i - 1 && Math.abs(last.shade - shade) < 0.02) {
+        last.to = i
+      } else {
+        out.push({ from: i, to: i, shade, month: m })
+      }
+    })
+    return out
+  }, [months, cov, bands])
+
+  const bandEls = runs.map((r) => (
+    <span key={r.from} className="tl-band"
+      style={{ left: `${(r.from / months.length) * 100}%`,
+               width: `${((r.to - r.from + 1) / months.length) * 100}%`,
+               opacity: 0.10 + 0.55 * r.shade }}
+      title={bandTitle(cov, months, r)} />
+  ))
 
   if (months.length === 0) {
     return <div className="card"><h2>{title}</h2><div className="empty">No dated comments.</div></div>
@@ -111,6 +148,12 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
               One lane per nickname
             </label>
           )}
+          {cov.size > 0 && (
+            <label className="filter" title="Shade months the corpus only partly covers">
+              <input type="checkbox" checked={bands} onChange={(e) => setBands(e.target.checked)} />
+              Show coverage
+            </label>
+          )}
         </div>
       </div>
 
@@ -118,7 +161,8 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
         nicks.map((nick, i) => (
           <div className="tl-row" key={nick}>
             <div className="tl-label" title={nick}>{nick}</div>
-            <div className="timeline fill">
+            <div className="timeline fill banded">
+              {bandEls}
               {months.map((m) => {
                 const n = byNick.get(nick).get(m) || 0
                 return <span key={m} className="bar"
@@ -130,7 +174,8 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
           </div>
         ))
       ) : (
-        <div className="timeline fill">
+        <div className="timeline fill banded">
+          {bandEls}
           {months.map((m) => {
             const tot = totalAt(m)
             return (
@@ -163,6 +208,13 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
           ))}
         </div>
       )}
+      {bands && runs.length > 0 && (
+        <div className="tl-legend">
+          <span className="key"><i className="band" style={{ opacity: 0.65 }} />Little or nothing held</span>
+          <span className="key"><i className="band" style={{ opacity: 0.25 }} />Partly held</span>
+          <span className="key subtle">Shaded months are gaps in the corpus, not necessarily silence.</span>
+        </div>
+      )}
       {!zoom && corpusLo && (
         <p className="subtle tl-note">
           Axis spans the whole corpus ({monthOf(corpusLo)} to {monthOf(corpusHi)}), so
@@ -171,6 +223,20 @@ export default function ActivityTimeline({ comments, span, title, defaultSplit =
       )}
     </div>
   )
+}
+
+// A month the coverage table says nothing about is drawn as strongly as a
+// month it says is empty. Not knowing how much is missing is not reassurance.
+const UNKNOWN = 0.85
+
+function bandTitle(cov, months, r) {
+  const a = months[r.from], b = months[r.to]
+  const when = a === b ? a : `${a} to ${b}`
+  const c = cov.get(a)
+  if (!c || c.coverage === null) return `${when}: coverage unknown — no reliable denominator`
+  const pct = Math.round(c.coverage * 100)
+  const of = c.published ? ` (${c.held} of ~${c.published} articles)` : ''
+  return `${when}: about ${pct}% of the paper held${of} — a gap here may be ours`
 }
 
 const sum = (m) => [...m.values()].reduce((a, b) => a + b, 0)
@@ -192,4 +258,23 @@ export function useCorpusSpan(send) {
     return () => { live = false }
   }, [send])
   return span
+}
+
+// Coverage for the titles this profile actually writes in. Cached per title
+// set, because a commenter reopened is the same question asked twice.
+const covCache = new Map()
+export function useCoverage(send, journals) {
+  const key = [...new Set(journals || [])].sort().join(',')
+  const [rows, setRows] = useState(null)
+  useEffect(() => {
+    if (!key) { setRows(null); return }
+    if (!covCache.has(key)) {
+      covCache.set(key, send('coverage_timeline', { journals: key.split(',') })
+        .then((r) => (r.ok ? r.months : [])).catch(() => []))
+    }
+    let live = true
+    covCache.get(key).then((m) => { if (live) setRows(m) })
+    return () => { live = false }
+  }, [key, send])
+  return rows
 }

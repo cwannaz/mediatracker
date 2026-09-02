@@ -16,8 +16,8 @@ import logging
 
 import websockets
 
-from . import (alias_candidates, anagrams, blobserver, db, handles, ids,
-               newcomers, nicknames, proximity, sources)
+from . import (alias_candidates, anagrams, blobserver, coverage, db, handles,
+               ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
 from .health import Health
@@ -135,7 +135,7 @@ class Server:
                              queued=self.engine.queue.qsize() if self.engine else 0,
                              last_stats=self.engine.last_stats if self.engine else {}))
 
-        elif cmd in ("dataset_stats", "browse_articles", "get_article",
+        elif cmd in ("coverage_timeline", "dataset_stats", "browse_articles", "get_article",
                      "browse_commenters", "get_commenter", "browse_authors",
                      "browse_sources", "list_personas", "get_persona",
                      "create_persona", "add_alias", "remove_alias",
@@ -205,6 +205,13 @@ class Server:
         limit = min(int(msg.get("limit", 100)), 1000)
         offset = int(msg.get("offset", 0))
         q = msg.get("q") or None
+        if cmd == "coverage_timeline":
+            # How much of each month we hold, so a plot can shade what it
+            # cannot vouch for. Journals narrow it to the titles a profile
+            # actually writes in — a band drawn from a paper they never
+            # touched would be about the corpus, not about them.
+            js = msg.get("journals") or None
+            return ok(cmd, months=coverage.timeline(self.conn, js))
         if cmd == "dataset_stats":
             return ok(cmd, **db.dataset_stats(self.conn))
         if cmd == "browse_articles":

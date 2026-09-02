@@ -3,7 +3,7 @@ import { languageMetrics } from './textmetrics.js'
 import ProfilePanel from './ProfilePanel.jsx'
 import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
-import ActivityTimeline, { useCorpusSpan } from './ActivityTimeline.jsx'
+import ActivityTimeline, { useCorpusSpan, useCoverage } from './ActivityTimeline.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { if (!v) return '—'; try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -24,6 +24,11 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
   const metrics = useMemo(() => languageMetrics(withText.map((c) => c.body_text)), [p]) // eslint-disable-line
 
   const span = useCorpusSpan(send)
+  // Coverage for the titles this person writes in, not the whole corpus:
+  // a band drawn from a paper they never touched would say nothing about them.
+  const journals = useMemo(
+    () => [...new Set(comments.map((c) => c.journal).filter(Boolean))], [comments])
+  const coverage = useCoverage(send, journals)
 
   // Which alias was in use in each month — shows renames as a handover.
   const aliasSpans = useMemo(() => {
@@ -98,7 +103,7 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
         </div>
       </div>
 
-      <ActivityTimeline comments={comments} span={span}
+      <ActivityTimeline comments={comments} span={span} coverage={coverage}
         title="Timeline — comments per month" />
 
       <div className="card">
