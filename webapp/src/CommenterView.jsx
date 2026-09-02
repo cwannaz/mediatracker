@@ -3,6 +3,7 @@ import { languageMetrics } from './textmetrics.js'
 import ProfilePanel from './ProfilePanel.jsx'
 import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
+import ActivityTimeline, { useCorpusSpan } from './ActivityTimeline.jsx'
 
 const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
@@ -22,19 +23,10 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
   const metrics = useMemo(
     () => languageMetrics(withText.map((c) => c.body_text)), [data]) // eslint-disable-line
 
-  const months = useMemo(() => {
-    const m = new Map()
-    for (const c of comments) {
-      if (!c.posted_at) continue
-      const k = String(c.posted_at).slice(0, 7)
-      m.set(k, (m.get(k) || 0) + 1)
-    }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [data]) // eslint-disable-line
+  const span = useCorpusSpan(send)
 
   if (!data) return <><button className="backlink" onClick={onBack}>← Back</button><div className="empty">Loading…</div></>
 
-  const peak = Math.max(1, ...months.map(([, n]) => n))
   const dated = comments.filter((c) => c.posted_at)
   const journals = [...new Set(comments.map((c) => c.journal))]
   const votes = comments.reduce((s, c) => s + (c.like_count || 0), 0)
@@ -65,20 +57,8 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
         </div>
       </div>
 
-      <div className="card">
-        <h2>Timeline — comments per month</h2>
-        {months.length === 0 ? <div className="empty">No dated comments.</div> : (
-          <>
-            <div className="timeline">
-              {months.map(([m, n]) => (
-                <span key={m} className="bar" style={{ height: `${(n / peak) * 100}%` }}
-                  title={`${m}: ${n} comment${n > 1 ? 's' : ''}`} />
-              ))}
-            </div>
-            <div className="tl-axis"><span>{months[0][0]}</span><span>{months[months.length - 1][0]}</span></div>
-          </>
-        )}
-      </div>
+      <ActivityTimeline comments={comments} span={span}
+        title="Timeline — comments per month" />
 
       <div className="card">
         <h2>Analysis</h2>

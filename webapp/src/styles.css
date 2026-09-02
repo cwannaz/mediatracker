@@ -480,3 +480,24 @@ tr.rowlink.on td { background: var(--surface-2); }
 .anag.k-anagram { background: rgba(88,166,255,.14); color: #7fb2f0; }
 .anag em { font-style: normal; text-transform: none; letter-spacing: 0;
   color: var(--text); margin-left: 5px; }
+
+/* ---- profile activity timeline ---- */
+/* Drawn against the whole corpus, so a profile carries ~220 monthly buckets
+   and they must divide the width rather than take a fixed one. The bars stay
+   above 1px so a single month is never invisible. */
+.timeline.fill .bar { flex: 1 1 0; min-width: 1px; }
+
+.card-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; }
+.card-head h2 { margin-bottom: 6px; }
+.tl-opts { display: flex; gap: 14px; flex-wrap: wrap; }
+
+/* Several ticks rather than just the ends: on a corpus-wide axis the endpoints
+   alone leave no way to place a cluster in time. */
+.tl-axis.full { justify-content: space-between; font-variant-numeric: tabular-nums; }
+
+.tl-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px;
+  font-size: 11.5px; color: var(--muted); }
+.tl-legend .key { display: inline-flex; align-items: center; gap: 5px; }
+.tl-legend .key i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.tl-note { margin: 8px 0 0; font-size: 11px; }
