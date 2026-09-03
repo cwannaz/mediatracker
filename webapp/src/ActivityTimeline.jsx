@@ -111,7 +111,7 @@ export default function ActivityTimeline({ comments, span, title, coverage, defa
             : 1 - c.coverage
       if (shade <= 0.02) return
       const last = out[out.length - 1]
-      if (last && last.to === i - 1 && Math.abs(last.shade - shade) < 0.02) {
+      if (last && last.to === i - 1 && Math.abs(last.shade - shade) < 0.08) {
         last.to = i
       } else {
         out.push({ from: i, to: i, shade, month: m })
@@ -124,7 +124,7 @@ export default function ActivityTimeline({ comments, span, title, coverage, defa
     <span key={r.from} className="tl-band"
       style={{ left: `${(r.from / months.length) * 100}%`,
                width: `${((r.to - r.from + 1) / months.length) * 100}%`,
-               opacity: 0.10 + 0.55 * r.shade }}
+               opacity: 0.06 + 0.28 * r.shade }}
       title={bandTitle(cov, months, r)} />
   ))
 
@@ -210,8 +210,8 @@ export default function ActivityTimeline({ comments, span, title, coverage, defa
       )}
       {bands && runs.length > 0 && (
         <div className="tl-legend">
-          <span className="key"><i className="band" style={{ opacity: 0.65 }} />Little or nothing held</span>
-          <span className="key"><i className="band" style={{ opacity: 0.25 }} />Partly held</span>
+          <span className="key"><i className="band" style={{ opacity: 0.34 }} />Little or nothing held</span>
+          <span className="key"><i className="band" style={{ opacity: 0.15 }} />Partly held</span>
           <span className="key subtle">Shaded months are gaps in the corpus, not necessarily silence.</span>
         </div>
       )}
