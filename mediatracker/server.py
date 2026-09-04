@@ -17,6 +17,7 @@ import logging
 import websockets
 
 from . import (alias_candidates, anagrams, blobserver, coverage, db, handles,
+               stance,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
@@ -144,6 +145,7 @@ class Server:
                      "findings_overview", "proximity_pairs",
                      "proximity_neighbours", "proximity_timeline",
                      "proximity_calibration", "newcomers_overview",
+                     "stance_rank", "stance_neighbours",
                      "newcomers_predecessors", "list_notes", "add_note",
                      "update_note", "delete_note", "list_accounts",
                      "add_account", "update_account", "delete_account",
@@ -212,6 +214,19 @@ class Server:
             # touched would be about the corpus, not about them.
             js = msg.get("journals") or None
             return ok(cmd, months=coverage.timeline(self.conn, js))
+        if cmd == "stance_rank":
+            # Not who writes alike, but who is doing the same thing in the
+            # thread. Ranked by joint outlier position across the axes, which
+            # is what a reader recognises and a cosine cannot see.
+            return ok(cmd, **stance.rank(
+                self.conn, community=msg.get("community") or None,
+                min_comments=int(msg.get("min_comments", 3)), limit=limit))
+        if cmd == "stance_neighbours":
+            return ok(cmd, **stance.neighbours(
+                self.conn, kind=msg.get("kind") or "nick", key=msg.get("key"),
+                community=msg.get("community") or None,
+                min_comments=int(msg.get("min_comments", 3)), limit=limit,
+                after=bool(msg.get("after"))))
         if cmd == "dataset_stats":
             return ok(cmd, **db.dataset_stats(self.conn))
         if cmd == "browse_articles":

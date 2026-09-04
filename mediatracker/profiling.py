@@ -102,7 +102,13 @@ def build_subjects(conn, min_comments: int = 5) -> list[dict]:
                    (pa.persona_id IS NOT NULL)                       AS is_persona,
                    COALESCE(p.label, c.author_nick)                  AS label,
                    c.author_nick, cs.posted_at, cs.body_text, cs.like_count,
-                   j.slug AS journal, a.origin, art.headline
+                   j.slug AS journal, a.origin, art.headline,
+                   -- Whether this comment answered another one. The threading
+                   -- survives only where the platform recorded it, so this is
+                   -- a fact about the page as much as about the writer; see
+                   -- `stance.reply_baseline` before comparing two subjects on
+                   -- it.
+                   (c.parent_id IS NOT NULL)                        AS is_reply
             FROM comment c
             -- latest snapshot only: a comment re-seen by a later scan has one
             -- snapshot per scan, and joining them all would count it twice.
