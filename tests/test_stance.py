@@ -120,3 +120,20 @@ def test_an_unmeasured_axis_counts_as_typical_rather_than_absent():
         assert r["z"].get("reply") is None
         assert r["n_axes"] == len(st.AXES) - 1
         assert r["stance"] == sum(r["z"].values()) / len(st.AXES)
+
+
+def test_an_idiom_does_not_count_as_citing_a_report():
+    # "par rapport à" means "compared to" and is 40.1% of every `rapport` in
+    # the corpus. Counted blind it makes ordinary comparison look like
+    # argument from evidence.
+    idiom = _subject([_c("par rapport " + "mot " * 2500)])
+    real = _subject([_c("le rapport " + "mot " * 2500)])
+    assert st.measure(idiom, {})["evidence"] == 0.0
+    assert st.measure(real, {})["evidence"] > 0.0
+
+
+def test_the_page_being_replied_to_is_not_evidence():
+    # `article` was 17.2% of all evidence hits before this: on a comment forum
+    # "l'article" is where you are, not a source you brought.
+    assert "article" not in st.EVIDENCE
+    assert "source" in st.EVIDENCE

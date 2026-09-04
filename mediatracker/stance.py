@@ -64,12 +64,25 @@ ADDRESS = frozenset("vous vos votre vôtre".split())
 
 # Appeals to evidence. Not "is this person right" but "does this person argue
 # by citation at all", which is a stance whether or not the sources are good.
+#
+# Trimmed after reading the top of the first ranking, which is the only way
+# these errors ever surface. `article` alone was 17.2% of all hits on Le Matin
+# -- on a comment forum "l'article" is the page being replied to, not a
+# citation -- and `informations`, `auteur` and `faits` are the same kind of
+# false friend, the last being indistinguishable from the past participle of
+# `faire`. Removing them cost nothing real and stopped the axis rewarding
+# people for mentioning where they were.
 EVIDENCE = frozenset("""
 source sources preuve preuves vérifier vérifiez vérification rapport étude
 études crédibilité prétendre prétendez affirmer affirmez démontrer factuel
-faits information informations citer citez contredire prouve prouver lien
-article référence chiffres statistiques auteur documenté documentée
+citer citez contredire prouve prouver lien référence chiffres statistiques
+documenté documentée
 """.split())
+
+# Words that only count as evidence outside a fixed idiom. `par rapport à`
+# means "compared to" and accounts for 40.1% of every `rapport` in the corpus;
+# counted blind it makes ordinary comparison look like citing a report.
+EVIDENCE_NOT_AFTER = {"rapport": frozenset({"par"})}
 
 # Topical lexicons, one per period. The overlap between them is deliberate:
 # terms like `complot` and `propagande` never went away, and dropping them
@@ -152,11 +165,21 @@ def measure(subject: dict, baseline: dict[tuple, float]) -> dict | None:
     expected = 0.0
     years: Counter = Counter()
 
+    evidence_hits = 0
     for c in subject["comments"]:
         text = c.get("body_text") or ""
         ws = WORD.findall(text)
-        words.extend(w.lower() for w in ws)
+        low = [w.lower() for w in ws]
+        words.extend(low)
         quotes += text.count('"') + text.count("«")
+
+        for i, w in enumerate(low):
+            if w not in EVIDENCE:
+                continue
+            blocked = EVIDENCE_NOT_AFTER.get(w)
+            if blocked and i and low[i - 1] in blocked:
+                continue
+            evidence_hits += 1
 
         when = c.get("posted_at")
         year = when.year if when else None
@@ -178,7 +201,7 @@ def measure(subject: dict, baseline: dict[tuple, float]) -> dict | None:
 
     out = {
         "address": 1000 * sum(1 for w in words if w in ADDRESS) / nw,
-        "evidence": 1000 * sum(1 for w in words if w in EVIDENCE) / nw,
+        "evidence": 1000 * evidence_hits / nw,
         "quotation": 1000 * quotes / nw,
         "milieu": 1000 * milieu_hits / nw,
         "n_words": nw,
@@ -351,7 +374,10 @@ def main(argv=None) -> int:
     from . import db
     from .config import load_config
     p = argparse.ArgumentParser(prog="mediatracker.stance")
-    p.add_argument("--community", default="lematin")
+    p.add_argument("--community", default="lematin",
+                   help="restrict the population; 'all' pools every community, "
+                        "which makes the z-scores relative to the union rather "
+                        "than to one public")
     p.add_argument("--min-comments", type=int, default=3)
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--near", default=None,
@@ -360,6 +386,11 @@ def main(argv=None) -> int:
     p.add_argument("--after", action="store_true",
                    help="only subjects that started after this one stopped")
     a = p.parse_args(argv)
+    # "" and "all" both mean "do not restrict". Without this an empty string
+    # silently matches no community and reports an empty field as if the
+    # population had nothing in it.
+    if a.community in ("", "all"):
+        a.community = None
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
     conn = db.connect(load_config())
     if conn is None:
