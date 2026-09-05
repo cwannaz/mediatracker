@@ -101,10 +101,20 @@ CATEGORIES: tuple[tuple[str, str, str], ...] = (
      r"cff|demi-tarif)|je prends le train|je fais \d+ ?km|mon trajet)"),
 )
 
-# Words that flip a match, checked in the run-up to it. "je ne suis pas
-# médecin" matches the occupation pattern and asserts the opposite.
-NEGATIONS = ("ne suis pas", "ne suis plus", "n'ai jamais", "ne travaille pas",
-             "ne suis ni", "n'ai pas de", "n'ai plus de", "pas encore")
+# French negation, which is what flips a match. Matching the verb-adjacent
+# forms alone ("ne suis pas") is not enough in a population that argues for a
+# living: "De nous deux, ce n'est pas non plus moi qui ai comme associé de ma
+# société ..." asserts the opposite of the company it appears to disclose, and
+# the negation sits eight words from the match. So the particle itself is the
+# signal, wherever it falls in the clause.
+NEGATIONS = ("ne ", "n'", "aucun", "jamais", "pas moi qui", "sans être")
+
+# ... but only within the SAME clause. "Je n'ai pas de voiture, mais je suis
+# retraité" is a real disclosure whose run-up happens to contain a negation
+# belonging to the clause before it, so the lookback stops at the nearest
+# boundary rather than running on into the previous thought.
+CLAUSE_BREAKS = (", mais ", " mais ", "; ", " car ", " donc ", " alors que ",
+                 " tandis que ", " et ", " ou ", ". ", "! ", "? ")
 
 # Conditional and hypothetical framings. Someone arguing "si j'étais patron"
 # is not telling us they run a company.
@@ -134,10 +144,18 @@ def strip_quoted(text: str) -> str:
 
 
 def _is_disowned(haystack: str, at: int) -> bool:
-    """Whether the run-up to a match negates it or makes it hypothetical."""
+    """Whether the run-up to a match negates it or makes it hypothetical.
+
+    Only the clause the match sits in is consulted. A negation two clauses
+    back governs its own verb, not this one, and reading further turns every
+    "je n'ai pas de X, mais je suis Y" into a missed disclosure.
+    """
     before = haystack[max(0, at - LOOKBACK):at]
-    return (any(n in before for n in NEGATIONS)
-            or any(h in before for h in HYPOTHETICALS))
+    cut = max((before.rfind(b) + len(b) for b in CLAUSE_BREAKS
+               if b in before), default=0)
+    clause = before[cut:]
+    return (any(n in clause for n in NEGATIONS)
+            or any(h in clause for h in HYPOTHETICALS))
 
 
 def sentence_around(text: str, at: int) -> str:
@@ -226,21 +244,50 @@ def for_subject(comments: list[dict]) -> dict:
 
 def for_nick(conn, *, nick: str | None = None, persona_id=None,
              community: str | None = None) -> dict:
-    """Load one subject's comments and read their disclosures."""
-    from . import profiling as pf
-    key = str(persona_id) if persona_id is not None else nick
-    kind = "persona" if persona_id is not None else "nick"
-    for s in pf.build_subjects(conn, min_comments=1):
-        if community and s["community"] != community:
-            continue
-        if s["kind"] == kind and str(s["key"]) == key:
-            return {"label": s.get("label") or key, **for_subject(s["comments"])}
-        # A nickname folded into a persona is still reachable by its own name.
-        if kind == "nick" and nick in (s.get("aliases") or []):
-            return {"label": s.get("label") or key,
-                    **for_subject([c for c in s["comments"]
-                                   if c.get("author_nick") == nick])}
-    return {"label": key, "groups": [], "n_disclosures": 0,
+    """Load one subject's comments and read their disclosures.
+
+    Targeted on purpose. The first version went through
+    `profiling.build_subjects`, which loads every comment in the corpus to
+    answer a question about one person -- 2.8 million rows for a card in a
+    sidebar. On the daemon that is worse than slow: the server is a
+    single-threaded event loop, so the scan blocked it outright and new
+    connections timed out during the handshake while one profile rendered.
+    """
+    from . import db
+
+    label = nick
+    if persona_id is not None:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT p.label, array_agg(pa.nick)
+                             FROM persona p
+                             LEFT JOIN persona_alias pa ON pa.persona_id = p.id
+                            WHERE p.id = %s GROUP BY p.label""", (int(persona_id),))
+            row = cur.fetchone()
+        if not row:
+            return _empty(str(persona_id))
+        label, nicks = row[0], [n for n in (row[1] or []) if n]
+    else:
+        if not nick:
+            return _empty("")
+        nicks = [nick]
+
+    comments = db.comments_for_nicks(conn, nicks, limit=10 ** 9)
+    if community:
+        # These rows carry a journal, not a community, and the two are not the
+        # same: 24 heures and the Tribune share one comment backend and so one
+        # population. Seven nicknames exist in both communities and are
+        # deliberately two different subjects, so the scoping has to go
+        # through the journal table rather than compare slugs.
+        with conn.cursor() as cur:
+            cur.execute("SELECT slug, community FROM journal")
+            of = dict(cur.fetchall())
+        comments = [c for c in comments if of.get(c.get("journal")) == community]
+    return {"label": label or (nicks[0] if nicks else ""),
+            **for_subject(comments)}
+
+
+def _empty(label: str) -> dict:
+    return {"label": label, "groups": [], "n_disclosures": 0,
             "n_comments": 0, "per_1000": 0.0}
 
 

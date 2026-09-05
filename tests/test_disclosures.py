@@ -96,3 +96,25 @@ def test_groups_keep_the_declared_category_order():
     order = [g["key"] for g in out["groups"]]
     declared = [k for k, _, _ in d.CATEGORIES]
     assert order == sorted(order, key=declared.index)
+
+
+def test_a_comment_that_only_mentions_someone_else_is_not_a_disclosure():
+    # The pattern is first-person throughout; a third party's circumstances
+    # must never land on this page.
+    assert d.find("Sa femme est médecin et il habite à Vevey.") == []
+    assert d.find("Vous êtes retraité, vous ne payez plus.") == []
+
+
+def test_a_negation_anywhere_in_the_clause_flips_the_match():
+    # Verb-adjacent forms are not enough in a population that argues for a
+    # living: here the negation sits eight words from the match and asserts
+    # the opposite of the company it appears to disclose.
+    assert d.find("De nous deux, ce n'est pas non plus moi qui ai "
+                  "comme associé de ma société des citoyens russes.") == []
+    assert d.find("Aucun de mes enfants ne vote.") == []
+
+
+def test_a_negation_in_the_PREVIOUS_clause_does_not_reach_this_one():
+    # Otherwise every "je n'ai pas de X, mais je suis Y" is lost.
+    got = d.find("Je n'ai pas de voiture, mais je suis retraité depuis 2011.")
+    assert [k for k, _ in got] == ["occupation"]
