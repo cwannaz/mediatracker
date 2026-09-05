@@ -510,3 +510,16 @@ tr.rowlink.on td { background: var(--surface-2); }
   background: var(--muted); border-radius: 2px; z-index: 0; }
 .timeline.banded .bar { position: relative; z-index: 1; }
 .tl-legend .key i.band { background: var(--muted); }
+
+/* Private details: quotes, never summaries. Grouped by dimension, each group
+   showing two lines until asked for the rest — a heavy discloser can have
+   dozens and the card is a profile, not a transcript. */
+.pd-group { margin-top: 14px }
+.pd-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px }
+.pd-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+            opacity: .75 }
+.pd-count { font-size: 11px; opacity: .5 }
+.pd-when { font-size: 11px; margin-top: 2px }
+.linkish { background: none; border: 0; padding: 2px 0; cursor: pointer;
+           font: inherit; font-size: 12px; opacity: .7; text-decoration: underline }
+.linkish:hover { opacity: 1 }

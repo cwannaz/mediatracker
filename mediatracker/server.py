@@ -16,8 +16,8 @@ import logging
 
 import websockets
 
-from . import (alias_candidates, anagrams, blobserver, coverage, db, handles,
-               stance,
+from . import (alias_candidates, anagrams, blobserver, coverage, db, disclosures,
+               handles, stance,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
@@ -145,7 +145,7 @@ class Server:
                      "findings_overview", "proximity_pairs",
                      "proximity_neighbours", "proximity_timeline",
                      "proximity_calibration", "newcomers_overview",
-                     "stance_rank", "stance_neighbours",
+                     "stance_rank", "stance_neighbours", "profile_disclosures",
                      "newcomers_predecessors", "list_notes", "add_note",
                      "update_note", "delete_note", "list_accounts",
                      "add_account", "update_account", "delete_account",
@@ -214,6 +214,15 @@ class Server:
             # touched would be about the corpus, not about them.
             js = msg.get("journals") or None
             return ok(cmd, months=coverage.timeline(self.conn, js))
+        if cmd == "profile_disclosures":
+            # What the subject said about their own circumstances, verbatim.
+            # Deliberately not folded into `get_profile`: that call returns
+            # the LLM's estimates, and these are not estimates.
+            pid = msg.get("persona_id")
+            return ok(cmd, **disclosures.for_nick(
+                self.conn, nick=msg.get("nick"),
+                persona_id=int(pid) if pid is not None else None,
+                community=msg.get("community") or None))
         if cmd == "stance_rank":
             # Not who writes alike, but who is doing the same thing in the
             # thread. Ranked by joint outlier position across the axes, which

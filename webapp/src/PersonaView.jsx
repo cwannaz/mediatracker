@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { languageMetrics } from './textmetrics.js'
 import ProfilePanel from './ProfilePanel.jsx'
+import PrivateDetails from './PrivateDetails.jsx'
 import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
 import ActivityTimeline, { useCorpusSpan, useCoverage } from './ActivityTimeline.jsx'
@@ -122,6 +123,7 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
       </div>
 
       <ProfilePanel personaId={personaId} send={send} />
+      <PrivateDetails personaId={personaId} send={send} />
 
       <div className="card">
         <h2>Comments ({comments.length})</h2>
