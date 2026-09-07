@@ -1856,3 +1856,18 @@ def list_scan_runs(conn, *, slug: str | None = None, limit: int = 50) -> list[di
             cur.execute("SELECT * FROM scan_run ORDER BY requested_at DESC LIMIT %s", (limit,))
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def comment_exists(conn, comment_id: str) -> bool:
+    """Whether a comment row is already stored.
+
+    Used only on the rare path where a reply names a parent that was not in
+    the fetched batch, to decide between keeping the link and dropping it. A
+    rescan legitimately meets parents stored by an earlier run, so absence
+    from the batch is not absence from the corpus.
+    """
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM comment WHERE id = %s", (comment_id,))
+        return cur.fetchone() is not None

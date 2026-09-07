@@ -29,6 +29,42 @@ class IngestStats:
     errors: int = 0
 
 
+def _parents_first(comments: list) -> list:
+    """Reorder so a comment is written after the comment it answers.
+
+    `comment.parent_id` is a foreign key onto `comment.id`, and the TX Astro
+    endpoint is asked for newestFirst, which puts a REPLY ahead of the parent
+    it answers. Writing the reply first violates the key, and because the whole
+    article's comments share a transaction, ONE misordered reply discarded
+    every comment on that article -- 169 articles across the sisters before
+    this was found, on top of a 7.6% shortfall from paging.
+
+    A comment whose parent is not in this batch keeps its link: it is dropped
+    later, by `_write_comment`, which is where knowing what exists belongs.
+    Ordering is only about the batch's own shape.
+    """
+    by_key = {c.source_key: c for c in comments if getattr(c, "source_key", None)}
+    seen: set[str] = set()
+    out: list = []
+
+    def emit(c, depth: int = 0) -> None:
+        key = getattr(c, "source_key", None)
+        if key is not None:
+            if key in seen:
+                return
+            seen.add(key)
+        parent = getattr(c, "parent_source_key", None)
+        # depth caps a cycle, which the platform should never produce and
+        # which would otherwise recurse until the stack gave out.
+        if parent and parent in by_key and parent not in seen and depth < 100:
+            emit(by_key[parent], depth + 1)
+        out.append(c)
+
+    for c in comments:
+        emit(c)
+    return out
+
+
 class Pipeline:
     def __init__(self, *, conn, blobs: BlobStore, store, fetcher: Fetcher,
                  origin: str = "live") -> None:
@@ -148,8 +184,10 @@ class Pipeline:
             return
 
         comments = await self._safe_comments(source, article)
-        for c in comments:
-            self._write_comment(source, aid, c, stats)
+        ordered = _parents_first(comments)
+        in_batch = {c.source_key for c in ordered if getattr(c, "source_key", None)}
+        for c in ordered:
+            self._write_comment(source, aid, c, stats, in_batch=in_batch)
         # Recorded only after the thread was actually read, so a failed fetch
         # leaves the marker at its old value and the next scan tries again.
         if article.comment_count is not None and self.conn is not None:
@@ -234,7 +272,8 @@ class Pipeline:
             log.warning("[%s] comment fetch failed: %s", source.slug, exc)
             return []
 
-    def _write_comment(self, source: Source, aid: str, c: ParsedComment, stats) -> None:
+    def _write_comment(self, source: Source, aid: str, c: ParsedComment, stats,
+                       in_batch: set | None = None) -> None:
         stats.comments_seen += 1
         # Where two titles share one comment backend the comment is one thing
         # seen twice, so its id must not depend on which title's article row we
@@ -254,6 +293,24 @@ class Pipeline:
             cid = ids.synthetic_comment_id(
                 aid, c.author_nick or "", str(c.posted_at or ""), c.body_text or "")
         parent = ident(c.parent_source_key) if c.parent_source_key else None
+        if parent is not None and in_batch is not None \
+                and c.parent_source_key not in in_batch \
+                and not db.comment_exists(self.conn, parent):
+            # The parent was never fetched. The platform pages comments and a
+            # thread can be cut mid-way, so a reply's parent may sit in a page
+            # we never got -- 7.6% of the sisters' comments are missing that
+            # way. Keeping the link would violate the foreign key and, because
+            # the article's comments share a transaction, take the whole
+            # thread down with it. The reply is real and is kept; what is lost
+            # is knowing whom it answered, and that is recorded rather than
+            # passed off as a top-level comment.
+            #
+            # The database is consulted only when the parent is absent from
+            # this batch, which is rare: a parent that IS in the batch was
+            # already written, because `_parents_first` ordered it so.
+            c.raw_meta = dict(c.raw_meta or {})
+            c.raw_meta["parent_unfetched"] = c.parent_source_key
+            parent = None
         # Include the reaction distribution so evolving votes (which keep changing
         # even after commenting is disabled) always produce a fresh snapshot — the
         # latest snapshot is then the final vote distribution.
