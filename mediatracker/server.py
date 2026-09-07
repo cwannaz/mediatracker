@@ -17,7 +17,7 @@ import logging
 import websockets
 
 from . import (alias_candidates, anagrams, blobserver, coverage, db, disclosures,
-               handles, stance,
+               handles, search, stance, thumbs,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
@@ -40,6 +40,14 @@ class Server:
         self.blobs = BlobStore(cfg.blob_path)
         self.store = JsonlStore(cfg.jsonl_path)
         self.conn = None
+        # Search gets its OWN connection, used only from a worker thread.
+        # Every other read here runs inline on the event loop, which is
+        # survivable because those queries are bounded by construction; a
+        # search is bounded only by what the user typed, and one slow scan on
+        # the loop stops the daemon answering anybody -- including the
+        # handshake of the next websocket to connect. That failure has
+        # already happened once in this project, from a profile query.
+        self.search_conn = None
         self.engine: ScanEngine | None = None
 
     # ------------------------------------------------------------------ #
@@ -63,6 +71,12 @@ class Server:
 
         if self.conn is not None:
             blobserver.start(self.cfg, self._blob_lookup)
+            try:
+                self.search_conn = db.connect(self.cfg)
+                search.ensure_schema(self.search_conn)
+            except Exception as exc:      # an unbuilt index must not stop the daemon
+                log.warning("search index unavailable: %s", exc)
+                self.search_conn = None
 
         async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
@@ -136,6 +150,23 @@ class Server:
                              queued=self.engine.queue.qsize() if self.engine else 0,
                              last_stats=self.engine.last_stats if self.engine else {}))
 
+        elif cmd in ("search", "search_facets", "search_status"):
+            if self.search_conn is None:
+                await ws.send(error(cmd, "degraded: search index unavailable"))
+                return
+            # to_thread, not an inline call: see the note on search_conn.
+            try:
+                payload = await asyncio.to_thread(self._search, cmd, msg)
+            except Exception as exc:
+                log.warning("search failed: %s", exc)
+                try:
+                    self.search_conn.rollback()
+                except Exception:
+                    pass
+                await ws.send(error(cmd, str(exc)))
+                return
+            await ws.send(payload)
+
         elif cmd in ("coverage_timeline", "dataset_stats", "browse_articles", "get_article",
                      "browse_commenters", "get_commenter", "browse_authors",
                      "browse_sources", "list_personas", "get_persona",
@@ -201,6 +232,23 @@ class Server:
         except Exception as exc:
             log.warning("blob lookup failed for %s: %s", sha256, exc)
             return None
+
+    def _search(self, cmd: str, msg: dict) -> str:
+        """The corpus-wide index. Runs on a worker thread, never on the loop."""
+        if cmd == "search_status":
+            return ok(cmd, kinds=search.watermarks(self.search_conn),
+                      thumbnails={"available": thumbs.available(),
+                                  "cache": thumbs.cache_size(self.cfg.blob_path)})
+        kinds = tuple(msg.get("kinds") or ())
+        journals = tuple(msg.get("journals") or ())
+        common = dict(q=msg.get("q") or "", mode=msg.get("mode") or "text",
+                      kinds=kinds, journals=journals,
+                      year_from=msg.get("year_from"), year_to=msg.get("year_to"))
+        if cmd == "search_facets":
+            return ok(cmd, **search.facets_for(self.search_conn, **common))
+        return ok(cmd, **search.query(self.search_conn,
+                                      limit=int(msg.get("limit", 50)),
+                                      offset=int(msg.get("offset", 0)), **common))
 
     def _browse(self, cmd: str, msg: dict) -> str:
         """Read-only queries backing the Article Browser subtabs."""

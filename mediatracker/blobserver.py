@@ -4,6 +4,16 @@ The daemon's control surface is WebSocket/JSON, which cannot carry <img src>.
 This serves GET /blob/<sha256> from the content-addressed store so the local web
 app can reproduce an article's images offline. Bound to 127.0.0.1, read-only, and
 it only ever serves paths derived from a 64-hex sha256 that exists in the DB.
+
+GET /thumb/<size>/<sha256> serves a cached downscale of the same blob, for the
+picture browser, where a grid of originals would be tens of megabytes. The
+downscale is generated on first request and cached on disk. If it cannot be made
+-- no Pillow, an unrasterisable format, an image already small enough -- the
+original is served instead, so the route never fails merely because the cache
+is cold or the optional dependency is missing.
+
+Generation happens on this thread, which is why the server is threading: one
+slow decode must not hold up the other fifty-nine cells of a grid.
 """
 from __future__ import annotations
 
@@ -14,9 +24,12 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from . import thumbs
+
 log = logging.getLogger(__name__)
 
 _SHA_RE = re.compile(r"^/blob/([0-9a-f]{64})$")
+_THUMB_RE = re.compile(r"^/thumb/([a-z])/([0-9a-f]{64})$")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -29,10 +42,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 (http.server API)
         m = _SHA_RE.match(self.path)
-        if not m:
+        t = _THUMB_RE.match(self.path)
+        if not (m or t):
             self.send_error(404, "not found")
             return
-        sha = m.group(1)
+        size = t.group(1) if t else None
+        sha = (t or m).group(2 if t else 1)
         row = self._lookup(sha)
         if not row:
             self.send_error(404, "unknown blob")
@@ -43,6 +58,11 @@ class _Handler(BaseHTTPRequestHandler):
         if not str(path).startswith(str(self._blob_root.resolve())) or not path.is_file():
             self.send_error(404, "missing file")
             return
+        if size:
+            made = thumbs.ensure(self._blob_root, sha256=sha,
+                                 storage_path=storage_path, size=size, mime=mime)
+            if made:                      # else fall through to the original
+                path, mime = made
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mime or "application/octet-stream")
