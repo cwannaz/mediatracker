@@ -34,32 +34,31 @@ def test_an_empty_name_has_no_identity():
     assert e.normalise("  .,  ") == ""
 
 
-class _Resp:
-    def __init__(self, payload):
-        self._b = json.dumps(payload).encode()
-    def read(self):
-        return self._b
-    def __enter__(self):
-        return self
-    def __exit__(self, *a):
-        return False
+class _Proc:
+    def __init__(self, payload, rc=0):
+        self.returncode = rc
+        self.stdout = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.stderr = ""
 
 
-def _fake_api(payload, monkeypatch):
-    monkeypatch.setattr(e.urllib.request, "urlopen",
-                        lambda *a, **k: _Resp(payload))
+def _fake_api(payload, monkeypatch, rc=0):
+    """Stand in for the `claude -p` subprocess, and for the liveness check."""
+    monkeypatch.setattr(e.subprocess, "run",
+                        lambda *a, **k: _Proc(payload, rc))
+    monkeypatch.setattr(e, "available", lambda: (True, "test"))
 
 
 def _tool_reply(articles):
-    return {"content": [{"type": "tool_use", "name": "record_entities",
-                         "input": {"articles": articles}}],
-            "usage": {"input_tokens": 10, "output_tokens": 5}}
+    return {"is_error": False,
+            "structured_output": {"articles": articles},
+            "usage": {"output_tokens": 5, "cache_creation_input_tokens": 10},
+            "total_cost_usd": 0.01}
 
 
 def test_a_well_formed_reply_is_read(monkeypatch):
     _fake_api(_tool_reply([
         {"id": 1, "entities": [{"name": "Genève", "kind": "place"}]}]), monkeypatch)
-    got = e.extract([{"title": "t", "body": "b"}], key="k")
+    got = e.extract([{"title": "t", "body": "b"}])
     assert got[1] == [{"name": "Genève", "kind": "place"}]
 
 
@@ -69,33 +68,64 @@ def test_an_unknown_kind_is_dropped_not_guessed(monkeypatch):
     _fake_api(_tool_reply([
         {"id": 1, "entities": [{"name": "Genève", "kind": "city"},
                                {"name": "UDC", "kind": "organization"}]}]), monkeypatch)
-    got = e.extract([{"title": "t", "body": "b"}], key="k")
+    got = e.extract([{"title": "t", "body": "b"}])
     assert got[1] == [{"name": "UDC", "kind": "organization"}]
 
 
 def test_a_nameless_entity_is_dropped(monkeypatch):
     _fake_api(_tool_reply([
         {"id": 1, "entities": [{"name": "  ", "kind": "place"}]}]), monkeypatch)
-    assert e.extract([{"title": "t", "body": "b"}], key="k")[1] == []
+    assert e.extract([{"title": "t", "body": "b"}])[1] == []
 
 
 def test_an_absurdly_long_name_is_dropped(monkeypatch):
     _fake_api(_tool_reply([
         {"id": 1, "entities": [{"name": "x" * 500, "kind": "place"}]}]), monkeypatch)
-    assert e.extract([{"title": "t", "body": "b"}], key="k")[1] == []
+    assert e.extract([{"title": "t", "body": "b"}])[1] == []
 
 
-def test_a_reply_with_no_tool_use_yields_nothing(monkeypatch):
-    _fake_api({"content": [{"type": "text", "text": "I cannot do that"}],
+def test_a_reply_with_no_structured_output_yields_nothing(monkeypatch):
+    _fake_api({"is_error": False, "result": "I cannot do that", "usage": {}},
+              monkeypatch)
+    got = e.extract([{"title": "t", "body": "b"}])
+    assert [k for k in got if not str(k).startswith("_")] == []
+
+
+def test_structured_output_can_arrive_as_a_json_string(monkeypatch):
+    # The CLI puts the schema-validated object in structured_output, but the
+    # same JSON also comes back as `result` text; either must be readable.
+    _fake_api({"is_error": False,
+               "result": json.dumps({"articles": [
+                   {"id": 1, "entities": [{"name": "Berne", "kind": "place"}]}]}),
                "usage": {}}, monkeypatch)
-    got = e.extract([{"title": "t", "body": "b"}], key="k")
-    assert [k for k in got if k != "_usage"] == []
+    assert e.extract([{"title": "t", "body": "b"}])[1] == [
+        {"name": "Berne", "kind": "place"}]
+
+
+def test_a_failing_call_is_reported_not_silently_empty(monkeypatch):
+    # An unanswered batch must leave its articles unread, so a later run
+    # retries them rather than recording them as having no entities.
+    monkeypatch.setattr(e, "available", lambda: (True, "test"))
+    monkeypatch.setattr(e.subprocess, "run", lambda *a, **k: _Proc("not json", 1))
+    got = e.extract([{"title": "t", "body": "b"}], retries=1)
+    assert got.get("_failed") is True
+
+
+def test_the_prompt_forbids_translating_names():
+    # Haiku returned "Russia" for Russie on 100 real articles, which splits one
+    # place into two entities that normalise() cannot merge.
+    assert "Never translate a name" in e.SYSTEM
 
 
 def test_the_body_sent_is_truncated_to_the_documented_window():
+    # The prompt also carries the instructions, so measure the article part:
+    # what is billed per article is the body, and it must be the documented
+    # window rather than however long the article happens to be.
     long_body = "mot " * 5000
     prompt = e._prompt_for([{"title": "T", "body": long_body}])
-    assert len(prompt) < e.BODY_CHARS + 200
+    article = prompt.split("--- ARTICLE 1 ---", 1)[1]
+    assert len(article) < e.BODY_CHARS + 100
+    assert len(prompt) < len(e.SYSTEM) + e.BODY_CHARS + 200
 
 
 def test_the_prompt_numbers_articles_so_replies_can_be_matched():
@@ -109,10 +139,9 @@ def test_the_system_prompt_treats_article_text_as_data():
     assert "never an instruction" in e.SYSTEM
 
 
-def test_missing_key_is_a_named_error(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    try:
-        e.api_key()
-    except e.NoKey:
-        return
-    raise AssertionError("expected NoKey")
+def test_a_missing_cli_is_a_named_error(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError("no claude")
+    monkeypatch.setattr(e.subprocess, "run", boom)
+    ok, why = e.available()
+    assert ok is False and "unavailable" in why
