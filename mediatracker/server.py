@@ -17,7 +17,7 @@ import logging
 import websockets
 
 from . import (alias_candidates, anagrams, blobserver, coverage, db, disclosures,
-               handles, search, stance, thumbs,
+               entities, handles, search, stance, thumbs,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
@@ -150,7 +150,8 @@ class Server:
                              queued=self.engine.queue.qsize() if self.engine else 0,
                              last_stats=self.engine.last_stats if self.engine else {}))
 
-        elif cmd in ("search", "search_facets", "search_status"):
+        elif cmd in ("search", "search_facets", "search_status",
+                     "entity_lookup", "entity_top"):
             if self.search_conn is None:
                 await ws.send(error(cmd, "degraded: search index unavailable"))
                 return
@@ -237,13 +238,23 @@ class Server:
         """The corpus-wide index. Runs on a worker thread, never on the loop."""
         if cmd == "search_status":
             return ok(cmd, kinds=search.watermarks(self.search_conn),
+                      entities=entities.coverage(self.search_conn),
                       thumbnails={"available": thumbs.available(),
                                   "cache": thumbs.cache_size(self.cfg.blob_path)})
+        if cmd == "entity_lookup":
+            return ok(cmd, entities=entities.lookup(
+                self.search_conn, q=msg.get("q"), kind=msg.get("kind") or None,
+                limit=int(msg.get("limit", 20))))
+        if cmd == "entity_top":
+            return ok(cmd, entities=entities.top(
+                self.search_conn, kind=msg.get("kind") or None,
+                limit=int(msg.get("limit", 50))))
         kinds = tuple(msg.get("kinds") or ())
         journals = tuple(msg.get("journals") or ())
         common = dict(q=msg.get("q") or "", mode=msg.get("mode") or "text",
                       kinds=kinds, journals=journals,
-                      year_from=msg.get("year_from"), year_to=msg.get("year_to"))
+                      year_from=msg.get("year_from"), year_to=msg.get("year_to"),
+                      entity_id=msg.get("entity_id"))
         if cmd == "search_facets":
             return ok(cmd, **search.facets_for(self.search_conn, **common))
         return ok(cmd, **search.query(self.search_conn,

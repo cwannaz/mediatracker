@@ -393,8 +393,15 @@ _HEADLINE_OPTS = "StartSel=<<,StopSel=>>,MaxWords=38,MinWords=12,MaxFragments=2,
 FACET_CAP = 20_000
 
 
-def _filters(kinds, journals, year_from, year_to, params) -> str:
+def _filters(kinds, journals, year_from, year_to, params, entity_id=None) -> str:
     where = []
+    if entity_id:
+        # A semi-join rather than a JOIN: a document mentioning the entity
+        # twice must not come back twice, and the planner handles IN against
+        # the mention primary key well.
+        where.append("(kind, ref) IN (SELECT doc_kind, doc_ref FROM entity_mention "
+                     "WHERE entity_id = %(eid)s)")
+        params["eid"] = int(entity_id)
     if kinds:
         where.append("kind = ANY(%(kinds)s)")
         params["kinds"] = list(kinds)
@@ -411,8 +418,8 @@ def _filters(kinds, journals, year_from, year_to, params) -> str:
 
 
 def query(conn, *, q: str, mode: str = "text", kinds=(), journals=(),
-          year_from=None, year_to=None, limit: int = 50, offset: int = 0,
-          timeout_ms: int = TIMEOUT_MS) -> dict:
+          year_from=None, year_to=None, entity_id=None, limit: int = 50,
+          offset: int = 0, timeout_ms: int = TIMEOUT_MS) -> dict:
     """Search the index. Returns rows, facet counts, and how it was answered.
 
     `mode` is "text" (stemmed, accent-folded, ranked) or "regex" (POSIX, case
@@ -468,7 +475,7 @@ def query(conn, *, q: str, mode: str = "text", kinds=(), journals=(),
                    f"'{_HEADLINE_OPTS}')")
         lateral = ""
 
-    where = match + _filters(kinds, journals, year_from, year_to, params)
+    where = match + _filters(kinds, journals, year_from, year_to, params, entity_id)
     truncated = False
     rows: list[dict] = []
     facets: dict = {}
@@ -528,7 +535,8 @@ def query(conn, *, q: str, mode: str = "text", kinds=(), journals=(),
 
 
 def facets_for(conn, *, q: str = "", mode: str = "text", kinds=(), journals=(),
-               year_from=None, year_to=None, timeout_ms: int = TIMEOUT_MS) -> dict:
+               year_from=None, year_to=None, entity_id=None,
+               timeout_ms: int = TIMEOUT_MS) -> dict:
     """Journal and year breakdown for a search, for the filter rail."""
     params: dict = {"q": q}
     if mode == "regex":
@@ -538,7 +546,7 @@ def facets_for(conn, *, q: str = "", mode: str = "text", kinds=(), journals=(),
         match = f"(tsv @@ {_Q_FR} OR tsv @@ {_Q_EN})"
     else:
         match = "true"
-    where = match + _filters(kinds, journals, year_from, year_to, params)
+    where = match + _filters(kinds, journals, year_from, year_to, params, entity_id)
     out = {"journals": {}, "years": {}}
     with conn.cursor() as cur:
         cur.execute("SELECT set_config('statement_timeout', %s, true)",

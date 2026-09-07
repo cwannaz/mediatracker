@@ -28,6 +28,8 @@ const JOURNALS = [
   { id: 'tdg', label: 'Tribune de Genève' },
 ]
 const PAGE = 60
+const ENT_KINDS = { person: 'Person', organization: 'Organisation',
+                    place: 'Place', event: 'Event', topic: 'Topic' }
 
 // ts_headline marks hits with << >>; render them rather than print them.
 function Highlight({ text }) {
@@ -56,6 +58,8 @@ export default function Search({ connected, send, navigate }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [status, setStatus] = useState(null)
+  const [ents, setEnts] = useState([])
+  const [entity, setEntity] = useState(null)   // {id, kind, name} or null
   const seq = useRef(0)
 
   // Debounce typing, but not in regex mode: a half-typed expression is
@@ -74,7 +78,20 @@ export default function Search({ connected, send, navigate }) {
     q, mode, kinds, journals,
     year_from: yearFrom ? Number(yearFrom) : null,
     year_to: yearTo ? Number(yearTo) : null,
-  }), [q, mode, kinds, journals, yearFrom, yearTo])
+    entity_id: entity?.id ?? null,
+  }), [q, mode, kinds, journals, yearFrom, yearTo, entity])
+
+  // Who and what the words name, offered beside the results rather than
+  // instead of them: the corpus is read progressively, so an entity rail that
+  // replaced the text search would go blank for anything not yet extracted.
+  useEffect(() => {
+    if (!connected || !q || mode === 'regex') { setEnts([]); return undefined }
+    let live = true
+    send('entity_lookup', { q, limit: 12 })
+      .then((r) => { if (live && r.ok) setEnts(r.entities || []) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [q, mode, connected, send])
 
   const run = useCallback((offset) => {
     if (!connected) return
@@ -167,6 +184,33 @@ export default function Search({ connected, send, navigate }) {
         </span>
       </div>
 
+      {entity && (
+        <div className="entbar">
+          <span className="entpill">
+            <span className="entkind">{ENT_KINDS[entity.kind] || entity.kind}</span>
+            {entity.name}
+            <button className="entx" onClick={() => setEntity(null)}
+                    aria-label="Clear entity filter">✕</button>
+          </span>
+          <span className="subtle">
+            showing only documents that mention this entity
+          </span>
+        </div>
+      )}
+
+      {!entity && ents.length > 0 && (
+        <div className="entrail">
+          <span className="subtle">Mentions:</span>
+          {ents.map((e) => (
+            <button key={e.id} className="entsug" onClick={() => setEntity(e)}
+                    title={`${ENT_KINDS[e.kind] || e.kind} · ${e.mentions} mentions`}>
+              {e.name}
+              <span className="entkind">{ENT_KINDS[e.kind] || e.kind}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="resline subtle">
         {busy && 'searching… '}
         {res && !busy && (
@@ -179,6 +223,10 @@ export default function Search({ connected, send, navigate }) {
                 get an exact figure</span>
             )}
           </>
+        )}
+        {status?.entities != null && status.entities.pct < 99.5 && (
+          <span className="snote"> · entities read from {status.entities.pct}% of
+            articles so far ({status.entities.entities.toLocaleString()} found)</span>
         )}
         {status?.kinds && !q && !busy && (
           <span className="snote"> · index holds{' '}

@@ -329,6 +329,12 @@ def record(conn, doc, entities: list[dict]) -> int:
                 ON CONFLICT (entity_id, doc_kind, doc_ref) DO NOTHING
             """, (eid, doc["kind"], doc["ref"], doc["journal"],
                   doc["published_at"], e["name"]))
+            # Counted here rather than only in recount(), which runs at the end
+            # of a run: this one takes days, and a rail that ranks entities by
+            # a total that is hours stale ranks them wrongly the whole time.
+            if cur.rowcount:
+                cur.execute("UPDATE entity SET mentions = mentions + 1 WHERE id = %s",
+                            (eid,))
             n += cur.rowcount
         cur.execute("""
             INSERT INTO entity_done (doc_kind, doc_ref, model, n_entities)
@@ -341,7 +347,11 @@ def record(conn, doc, entities: list[dict]) -> int:
 
 
 def recount(conn) -> None:
-    """Refresh mention totals. Cheaper once at the end than per insert."""
+    """Repair mention totals from the mentions themselves.
+
+    They are maintained incrementally as mentions land; this exists to correct
+    drift after an interrupted run, not as the normal path.
+    """
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE entity e SET mentions = c.n FROM (
@@ -445,6 +455,47 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
     recount(conn)
     return {"documents": done, "mentions": ents, "unanswered": failed,
             "usd": round(usd, 2), "seconds": round(time.time() - started, 1)}
+
+
+def lookup(conn, *, q: str | None = None, kind: str | None = None,
+           limit: int = 20) -> list[dict]:
+    """Entities matching a search term, commonest first, with their ids.
+
+    Trigram-matched on the display name rather than the normalised key, so
+    what the reader typed is compared with what they would have seen.
+    """
+    where, params = ["mentions > 0"], []
+    if q:
+        where.append("name ILIKE %s")
+        params.append(f"%{q.strip()}%")
+    if kind:
+        where.append("kind = %s")
+        params.append(kind)
+    with conn.cursor() as cur:
+        cur.execute(f"""SELECT id, kind, name, mentions FROM entity
+                        WHERE {' AND '.join(where)}
+                        ORDER BY mentions DESC, name LIMIT %s""", (*params, limit))
+        return [{"id": i, "kind": k, "name": n, "mentions": m}
+                for i, k, n, m in cur.fetchall()]
+
+
+def coverage(conn) -> dict:
+    """How much of the corpus has been read, so the UI can say so.
+
+    An entity view over a partly-read corpus is not wrong, it is incomplete,
+    and the difference has to be visible or every count reads as final.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM entity_done")
+        read = cur.fetchone()[0]
+        cur.execute("""SELECT count(*) FROM search_doc
+                       WHERE kind = 'article' AND length(coalesce(body,'')) > 200""")
+        total = cur.fetchone()[0]
+        cur.execute("SELECT count(*), coalesce(sum(mentions), 0) FROM entity")
+        n_ent, n_men = cur.fetchone()
+    return {"articles_read": read, "articles_total": total,
+            "pct": round(100 * read / max(1, total), 2),
+            "entities": n_ent, "mentions": n_men}
 
 
 def top(conn, *, kind: str | None = None, limit: int = 50, q: str | None = None):
