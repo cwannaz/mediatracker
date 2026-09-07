@@ -431,12 +431,36 @@ CREATE INDEX IF NOT EXISTS subject_account_platform_idx
 """
 
 
+# One arbitrary constant, shared by every process that may create tables.
+# Advisory locks live outside the transaction system, so this serialises the
+# schema step without holding a row or table lock of its own.
+_SCHEMA_LOCK = 728_314_159
+
+
 def ensure_schema(conn) -> None:
-    """Create/upgrade the schema. Idempotent; safe to run at every startup."""
+    """Create/upgrade the schema. Idempotent; safe to run at every startup.
+
+    Serialised across processes. `_SCHEMA` is a long batch of CREATE TABLE and
+    CREATE INDEX IF NOT EXISTS, each taking an exclusive lock, and Postgres
+    grants them in whatever order each session gets there. Two crawlers
+    starting in the same second therefore deadlock -- one waits for a table the
+    other already holds and vice versa -- and Postgres resolves it by killing
+    one of them. That is exactly what happened when the supervisor relaunched
+    three legs in a single sweep: two died on startup, and because they had
+    died quickly the supervisor read it as "nothing left to fetch" and retired
+    them permanently. A crash at startup and a finished job are not the same
+    thing, and this is the half of that confusion worth fixing at the source.
+    """
     if conn is None:
         return
     with conn.cursor() as cur:
-        cur.execute(_SCHEMA)
+        cur.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_LOCK,))
+        try:
+            cur.execute(_SCHEMA)
+        finally:
+            # Released even if the schema step fails, or the next process to
+            # start would block on a lock nobody holds a reason for.
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK,))
     log.info("schema ensured")
 
 
