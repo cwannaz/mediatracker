@@ -72,6 +72,9 @@ ARTICLES_PER_CALL = 50
 USD_PER_ARTICLE = 0.0075
 SECONDS_PER_ARTICLE = 2.55
 CALL_TIMEOUT = 900.0
+# Consecutive failed calls before a run gives up. A handful is bad luck;
+# a dozen is a condition the next call will not improve.
+GIVE_UP_AFTER = 12
 
 SYSTEM = """You extract named entities from Swiss French-language news articles.
 
@@ -262,7 +265,12 @@ def extract(batch: list[dict], *, model: str = MODEL,
                 log.warning("run reported an error: %.200s",
                             env.get("result") or env.get("api_error_status") or "")
         elif p is not None:
-            log.warning("claude exited %s: %.200s", p.returncode, p.stderr)
+            # stdout, not just stderr: the CLI reports a refusal, a usage limit
+            # or an auth problem on stdout and leaves stderr empty, and logging
+            # only stderr threw away the diagnosis for 8,063 failures.
+            log.warning("claude exited %s: out=%.300s err=%.200s",
+                        p.returncode, (p.stdout or "").strip(),
+                        (p.stderr or "").strip())
         if attempt < retries - 1:
             time.sleep(delay)
             delay *= 2
@@ -421,6 +429,7 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
     that was actually spent, so a run killed at any moment loses at most one
     call's work and never pays for the same article twice.
     """
+    from collections import deque
     from concurrent.futures import ThreadPoolExecutor
 
     ensure_schema(conn)
@@ -432,16 +441,56 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
                for i in range(0, len(docs), ARTICLES_PER_CALL)]
     done = ents = failed = 0
     usd = 0.0
+    consecutive = 0
+    stopped = None
     started = time.time()
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for batch, got in zip(batches, pool.map(
-                lambda b: extract(b, model=model), batches)):
+    workers = max(1, workers)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        # A sliding window, NOT `pool.map`. `map` submits every task at once,
+        # so giving up would stop the recording while the calls kept going --
+        # exactly the thing worth avoiding when the reason for failing is a
+        # usage limit. Only a few calls are ever in flight beyond the one being
+        # consumed, and abandoning the window abandons the work.
+        queue = iter(batches)
+        inflight: deque = deque()
+
+        def fill() -> None:
+            while len(inflight) < workers * 2:
+                try:
+                    b = next(queue)
+                except StopIteration:
+                    return
+                inflight.append((b, pool.submit(extract, b, model=model)))
+
+        fill()
+        while inflight:
+            batch, fut = inflight.popleft()
+            got = fut.result()
             usage = got.pop("_usage", {}) or {}
             usd += usage.get("usd", 0.0) or 0.0
             if got.pop("_failed", False):
                 failed += len(batch)
+                consecutive += 1
+                # Stop, rather than grind. A sustained failure is a usage
+                # limit, an outage or a broken login -- none of which the next
+                # call will fix, and all of which a later run will. The first
+                # version ran on through 2,683 consecutive failures and
+                # "finished" with 134,150 documents unread, which reads like a
+                # completed run and is not one. Nothing is marked read unless
+                # it came back, so stopping loses nothing.
+                if consecutive >= GIVE_UP_AFTER:
+                    stopped = (f"{consecutive} calls in a row failed; stopping. "
+                               f"Nothing was marked read, so re-running resumes "
+                               f"where this left off.")
+                    log.error(stopped)
+                    for _, pendingfut in inflight:
+                        pendingfut.cancel()
+                    inflight.clear()
+                    break
+                fill()
                 continue
+            consecutive = 0
             for pos, doc in enumerate(batch, 1):
                 if pos not in got:
                     # Not answered for: leave it unread so a later run retries.
@@ -449,12 +498,18 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
                     continue
                 ents += record(conn, doc, got[pos])
                 done += 1
-            conn.commit()
+            conn.commit()               # commit per call: the unit we paid for
             if progress:
                 progress(done, len(docs), ents, usd, failed)
+            fill()
+
     recount(conn)
-    return {"documents": done, "mentions": ents, "unanswered": failed,
-            "usd": round(usd, 2), "seconds": round(time.time() - started, 1)}
+    out = {"documents": done, "mentions": ents, "unanswered": failed,
+           "usd": round(usd, 2), "seconds": round(time.time() - started, 1),
+           "complete": stopped is None and failed == 0}
+    if stopped:
+        out["stopped"] = stopped
+    return out
 
 
 def lookup(conn, *, q: str | None = None, kind: str | None = None,

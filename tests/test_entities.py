@@ -145,3 +145,57 @@ def test_a_missing_cli_is_a_named_error(monkeypatch):
     monkeypatch.setattr(e.subprocess, "run", boom)
     ok, why = e.available()
     assert ok is False and "unavailable" in why
+
+
+def test_a_sustained_failure_stops_the_run(monkeypatch):
+    """A run that grinds through every batch while every call fails looks like
+    a completed run and is not one.
+
+    The first version did exactly that: 2,683 consecutive failures, 134,150
+    documents left unread, and a summary that reported success. Nothing is
+    marked read unless it came back, so stopping costs nothing and re-running
+    resumes.
+    """
+    calls = {"n": 0}
+
+    def always_fails(batch, **kw):
+        calls["n"] += 1
+        return {"_usage": {}, "_failed": True}
+
+    monkeypatch.setattr(e, "available", lambda: (True, "test"))
+    monkeypatch.setattr(e, "extract", always_fails)
+    monkeypatch.setattr(e, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(e, "recount", lambda conn: None)
+    monkeypatch.setattr(e, "pending", lambda conn, **kw: [
+        {"kind": "article", "ref": str(i), "journal": "lematin",
+         "published_at": None, "title": "t", "body": "b"} for i in range(5000)])
+
+    class _Conn:
+        def commit(self): pass
+    out = e.run(_Conn())
+    assert out["complete"] is False
+    assert "stopped" in out
+    # A few calls are in flight beyond the one being consumed, by design, so
+    # the count lands just above the threshold rather than exactly on it. What
+    # matters is that it is bounded: 5,000 documents is 100 batches, and the
+    # version this test exists for made all 100 calls and reported success.
+    assert calls["n"] <= e.GIVE_UP_AFTER + 4, (
+        f"made {calls['n']} calls after {e.GIVE_UP_AFTER} consecutive failures")
+    assert calls["n"] < 100, "ran the whole queue despite every call failing"
+
+
+def test_a_clean_run_reports_itself_complete(monkeypatch):
+    monkeypatch.setattr(e, "available", lambda: (True, "test"))
+    monkeypatch.setattr(e, "extract",
+                        lambda batch, **kw: {i: [] for i in range(1, len(batch) + 1)})
+    monkeypatch.setattr(e, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(e, "recount", lambda conn: None)
+    monkeypatch.setattr(e, "record", lambda conn, doc, ents: 0)
+    monkeypatch.setattr(e, "pending", lambda conn, **kw: [
+        {"kind": "article", "ref": "1", "journal": "lematin",
+         "published_at": None, "title": "t", "body": "b"}])
+
+    class _Conn:
+        def commit(self): pass
+    out = e.run(_Conn())
+    assert out["complete"] is True and out["unanswered"] == 0
