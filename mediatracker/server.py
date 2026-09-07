@@ -16,7 +16,7 @@ import logging
 
 import websockets
 
-from . import (alias_candidates, anagrams, blobserver, coverage, db, disclosures,
+from . import (alias_candidates, anagrams, api, blobserver, coverage, db, disclosures,
                entities, handles, search, stance, thumbs,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
@@ -77,6 +77,13 @@ class Server:
             except Exception as exc:      # an unbuilt index must not stop the daemon
                 log.warning("search index unavailable: %s", exc)
                 self.search_conn = None
+            try:
+                # Read-only HTTP/JSON for other projects. Its own threads and
+                # its own connections, so a caller's expensive query cannot
+                # reach the event loop this daemon answers the web app on.
+                api.start(self.cfg)
+            except Exception as exc:
+                log.warning("API unavailable: %s", exc)
 
         async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
