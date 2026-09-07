@@ -523,3 +523,103 @@ tr.rowlink.on td { background: var(--surface-2); }
 .linkish { background: none; border: 0; padding: 2px 0; cursor: pointer;
            font: inherit; font-size: 12px; opacity: .7; text-decoration: underline }
 .linkish:hover { opacity: 1 }
+
+/* ---------------------------------------------------------------- search -- */
+/* The search spine: box, filter chips, result list, contact sheet, gallery. */
+
+.searchpage { padding: 16px 18px 40px; }
+.searchbar { display: flex; gap: .6rem; align-items: center; margin: 1rem 0 .6rem; }
+.searchbox {
+  flex: 1; padding: .7rem .9rem; font-size: 1.05rem;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.searchbox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.modeswitch { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.modeswitch button {
+  padding: .55rem .8rem; background: var(--surface-2); color: var(--muted);
+  border: 0; cursor: pointer; font-size: .85rem;
+}
+.modeswitch button.on { background: var(--accent); color: #fff; }
+
+.sfilters { display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: center; margin-bottom: .5rem; }
+.fgroup { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
+.schip {
+  padding: .3rem .65rem; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); font-size: .82rem;
+}
+.schip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.schipn { margin-left: .4rem; opacity: .75; font-variant-numeric: tabular-nums; }
+.yr {
+  width: 4.5rem; padding: .3rem .45rem; font-size: .82rem;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.resline { margin: .2rem 0 .9rem; font-size: .85rem; }
+.resline .snote { opacity: .8; }
+.card.serror { border-color: var(--down); color: var(--down); }
+
+.results { display: flex; flex-direction: column; gap: .1rem; }
+.result { padding: .8rem 0; border-bottom: 1px solid var(--border); }
+.result.img { display: grid; grid-template-columns: 96px 1fr; gap: .8rem; align-items: start; }
+.rthumb { width: 96px; height: 64px; object-fit: cover; border-radius: 5px; background: var(--surface-2); }
+.rtitle { font-size: 1rem; font-weight: 600; margin-bottom: .15rem; }
+.rtitle a { color: var(--text); text-decoration: none; }
+.rtitle a:hover { text-decoration: underline; }
+.rmeta { font-size: .78rem; margin-bottom: .25rem; }
+.rmeta .linkish { color: var(--accent); opacity: .95; font-size: inherit; }
+.rsnip { font-size: .9rem; line-height: 1.5; }
+.result mark { background: var(--accent); color: #fff; padding: 0 .1em; border-radius: 2px; }
+.more-row { padding: 1rem 0; text-align: center; }
+
+/* Contact sheet. Fixed cells rather than masonry: a grid that reflows while
+   you read it is worse than one that crops, and cropping is recoverable. */
+.imgrid {
+  display: grid; gap: .7rem; margin-top: .4rem;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+.imcell {
+  display: flex; flex-direction: column; text-align: left; padding: 0;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 7px; overflow: hidden; cursor: zoom-in;
+}
+.imcell:hover { border-color: var(--accent); }
+.imcell img { width: 100%; height: 130px; object-fit: cover; display: block; background: #0003; }
+.imcap {
+  font-size: .78rem; line-height: 1.35; padding: .4rem .5rem .15rem;
+  color: var(--text); display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+.imwhen { font-size: .7rem; padding: 0 .5rem .45rem; }
+
+.gal-backdrop {
+  position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.93);
+  display: flex; align-items: center; justify-content: center; padding: 2rem;
+}
+.gal-figure {
+  margin: 0; max-width: min(1200px, 92vw); max-height: 92vh;
+  display: flex; flex-direction: column; gap: .7rem;
+}
+.gal-figure img {
+  max-width: 100%; max-height: 74vh; object-fit: contain;
+  border-radius: 5px; background: #111;
+}
+.gal-figure figcaption {
+  background: rgba(10,10,12,.92); border-radius: 7px; padding: .7rem .85rem;
+  display: flex; flex-direction: column; gap: .35rem;
+}
+.gal-caption { font-size: .95rem; line-height: 1.5; color: #f2f2f2; }
+.gal-meta, .gal-count { font-size: .78rem; color: #b9b9b9; }
+.gal-head { font-size: .82rem; color: #d5d5d5; }
+.gal-links { display: flex; gap: 1rem; font-size: .8rem; }
+.gal-links a { color: var(--accent); }
+.gal-close, .gal-nav {
+  position: absolute; background: rgba(255,255,255,.1); color: #fff;
+  border: 0; cursor: pointer; border-radius: 50%;
+}
+.gal-close { top: 1.1rem; right: 1.3rem; width: 2.2rem; height: 2.2rem; font-size: 1rem; }
+.gal-nav { top: 50%; transform: translateY(-50%); width: 3rem; height: 3rem; font-size: 2rem; line-height: 1; }
+.gal-nav.left { left: 1rem; }
+.gal-nav.right { right: 1rem; }
+.gal-close:hover, .gal-nav:hover { background: rgba(255,255,255,.22); }

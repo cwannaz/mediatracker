@@ -4,13 +4,19 @@ import { useRoute, useSubRoute } from './route.js'
 import DataSources from './DataSources.jsx'
 import DeveloperLogos from './DeveloperLogos.jsx'
 import Browser from './Browser.jsx'
+import Search from './Search.jsx'
 import Findings from './Findings.jsx'
 import { PulseMark } from './logos.jsx'
 
+// Search leads because the corpus is no longer primarily a study of
+// commenters. It is a record of what these papers published and what their
+// readers made of it, and the commenters are one branch of that — a rich one,
+// with its own subtabs under Browse, but not the entrance any more.
 const TABS = [
-  { id: 'sources', label: 'Data Sources' },
+  { id: 'search', label: 'Search' },
   { id: 'browser', label: 'Browse' },
   { id: 'findings', label: 'Findings' },
+  { id: 'sources', label: 'Data Sources' },
   { id: 'dev', label: 'Developer' },
 ]
 
@@ -60,6 +66,12 @@ export default function App() {
         </button>
       </header>
 
+      {tab === 'search' && (
+        <Search connected={connected} send={send}
+                /* Search hands back a Browse path (e.g. a commenter), so it is
+                   rooted at that tab rather than at the top level. */
+                navigate={(p) => navigate(['browser', ...p])} />
+      )}
       {tab === 'sources' && <DataSources connected={connected} send={send} route={sub} navigate={go} />}
       {tab === 'browser' && <Browser connected={connected} send={send} route={sub} navigate={go} back={goBack} />}
       {tab === 'findings' && <Findings connected={connected} send={send} route={sub} navigate={go} />}
