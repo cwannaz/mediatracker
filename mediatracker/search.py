@@ -377,13 +377,77 @@ def _strip_classes(pattern: str) -> str:
 # querying
 # --------------------------------------------------------------------------- #
 
-# Two tsqueries rather than one. The index holds French and English documents
-# side by side and each stems in its own configuration, so a single query
-# configuration would silently under-match the other language. GIN serves both
-# probes from the same index, and the cost of the second is small next to
-# being wrong about half a corpus once English sources arrive.
-_Q_FR = "websearch_to_tsquery('french_ua',  %(q)s)"
-_Q_EN = "websearch_to_tsquery('english_ua', %(q)s)"
+# --------------------------------------------------------------------------- #
+# what the reader typed
+# --------------------------------------------------------------------------- #
+
+_TOKEN = re.compile(r'(~?)"([^"]*)"|(~?)(\S+)')
+
+
+def parse_terms(q: str) -> dict:
+    """Split a text query into phrases, words, and the negations of each.
+
+    Two pieces of syntax, both asked for and both meaning something the bare
+    word list cannot say:
+
+    * `"grand remplacement"` is ONE block. Without it the two words are ANDed
+      and an article using them a paragraph apart matches, which is a different
+      claim about the corpus than the phrase occurring.
+    * `~chien` excludes. Postgres spells negation `-`, but a leading minus is
+      also how people write a hyphenated word, so `~` is the safer marker and
+      is what was asked for.
+
+    Quoting binds tighter than negation, so `~"grand remplacement"` excludes the
+    phrase rather than excluding "grand" and searching for "remplacement".
+    """
+    phrases, terms, not_phrases, not_terms = [], [], [], []
+    for neg_q, quoted, neg_w, word in _TOKEN.findall(q or ""):
+        if quoted or neg_q:
+            text = quoted.strip()
+            if not text:
+                continue
+            (not_phrases if neg_q == "~" else phrases).append(text)
+        else:
+            text = word.strip()
+            if not text or text == "~":
+                continue
+            (not_terms if neg_w == "~" else terms).append(text)
+    return {"phrases": phrases, "terms": terms,
+            "not_phrases": not_phrases, "not_terms": not_terms}
+
+
+def _query_sql(parsed: dict, cfg: str, params: dict, *, positive_only: bool = False):
+    """Build one configuration's tsquery from parsed input, or None if empty.
+
+    `&&` against an empty tsquery yields the other side unchanged, so a term
+    that stems to nothing -- a stopword -- drops out without special-casing and
+    without turning the whole query into a match-nothing.
+    """
+    parts = []
+    for i, text in enumerate(parsed["phrases"]):
+        params[f"p{i}"] = text
+        parts.append(f"phraseto_tsquery({cfg}, %(p{i})s)")
+    for i, text in enumerate(parsed["terms"]):
+        params[f"t{i}"] = text
+        parts.append(f"plainto_tsquery({cfg}, %(t{i})s)")
+    if not positive_only:
+        for i, text in enumerate(parsed["not_phrases"]):
+            params[f"np{i}"] = text
+            parts.append(f"!!phraseto_tsquery({cfg}, %(np{i})s)")
+        for i, text in enumerate(parsed["not_terms"]):
+            params[f"nt{i}"] = text
+            parts.append(f"!!plainto_tsquery({cfg}, %(nt{i})s)")
+    if not parts:
+        return None
+    return "(" + " && ".join(parts) + ")"
+
+
+# Every text query is built twice, once per configuration, and the two are
+# ORed. The index holds French and English documents side by side and each
+# stems in its own configuration, so a single configuration would silently
+# under-match the other language. GIN serves both probes from the same index,
+# and the second costs little next to being wrong about half a corpus once the
+# English sources arrive.
 
 _HEADLINE_OPTS = "StartSel=<<,StopSel=>>,MaxWords=38,MinWords=12,MaxFragments=2,FragmentDelimiter= … "
 
@@ -467,13 +531,34 @@ def query(conn, *, q: str, mode: str = "text", kinds=(), journals=(),
         lateral = ("LEFT JOIN LATERAL (SELECT regexp_instr("
                    "coalesce(d.body, d.title, ''), %(rx)s, 1, 1, 0, 'i') AS pos) m ON true")
     else:
-        match = f"(tsv @@ {_Q_FR} OR tsv @@ {_Q_EN})"
-        rank = (f"greatest(ts_rank_cd(tsv, {_Q_FR}), ts_rank_cd(tsv, {_Q_EN}))")
-        cfg = _config_case("d.lang")
-        snippet = (f"ts_headline({cfg}, coalesce(d.body, d.title, ''), "
-                   f"CASE WHEN d.lang = 'en' THEN {_Q_EN} ELSE {_Q_FR} END, "
-                   f"'{_HEADLINE_OPTS}')")
-        lateral = ""
+        parsed = parse_terms(q)
+        qfr = _query_sql(parsed, "'french_ua'::regconfig", params)
+        qen = _query_sql(parsed, "'english_ua'::regconfig", params)
+        if qfr is None:
+            # Everything the reader typed stemmed away -- stopwords only.
+            match, rank, snippet, lateral = "true", "0::float4", \
+                "left(coalesce(d.body, d.title, ''), 240)", ""
+            note = "nothing searchable in those words"
+        else:
+            match = f"(tsv @@ {qfr} OR tsv @@ {qen})"
+            rank = f"greatest(ts_rank_cd(tsv, {qfr}), ts_rank_cd(tsv, {qen}))"
+            # Highlight on the POSITIVE part only: a negated term is by
+            # definition absent, and asking ts_headline to mark what is not
+            # there produces a snippet chosen for the wrong reason.
+            hfr = _query_sql(parsed, "'french_ua'::regconfig", params, positive_only=True)
+            hen = _query_sql(parsed, "'english_ua'::regconfig", params, positive_only=True)
+            cfg = _config_case("d.lang")
+            if hfr is None:
+                snippet = "left(coalesce(d.body, d.title, ''), 240)"
+            else:
+                snippet = (f"ts_headline({cfg}, coalesce(d.body, d.title, ''), "
+                           f"CASE WHEN d.lang = 'en' THEN {hen} ELSE {hfr} END, "
+                           f"'{_HEADLINE_OPTS}')")
+            lateral = ""
+            if not (parsed["phrases"] or parsed["terms"]):
+                # Pure exclusion: no positive lexeme for GIN to start from, so
+                # this is a scan. Say so rather than look mysteriously slow.
+                note = "only exclusions given; scanned rather than indexed"
 
     where = match + _filters(kinds, journals, year_from, year_to, params, entity_id)
     truncated = False
@@ -543,7 +628,10 @@ def facets_for(conn, *, q: str = "", mode: str = "text", kinds=(), journals=(),
         params["rx"] = q
         match = "coalesce(body, title, '') ~* %(rx)s"
     elif q.strip():
-        match = f"(tsv @@ {_Q_FR} OR tsv @@ {_Q_EN})"
+        parsed = parse_terms(q)
+        qfr = _query_sql(parsed, "'french_ua'::regconfig", params)
+        qen = _query_sql(parsed, "'english_ua'::regconfig", params)
+        match = "true" if qfr is None else f"(tsv @@ {qfr} OR tsv @@ {qen})"
     else:
         match = "true"
     where = match + _filters(kinds, journals, year_from, year_to, params, entity_id)

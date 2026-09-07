@@ -137,7 +137,7 @@ export default function Search({ connected, send, navigate }) {
           onChange={(e) => setRaw(e.target.value)}
           placeholder={mode === 'regex'
             ? 'POSIX regular expression, e.g. (?:grand )?remplacement'
-            : 'Search articles, pictures and comments…'}
+            : 'Search articles, pictures and comments — "quote a phrase", ~exclude a word'}
           aria-label="Search"
           spellCheck={false}
         />
@@ -242,8 +242,8 @@ export default function Search({ connected, send, navigate }) {
         <div className="card">
           <p className="subtle">
             {q
-              ? 'Nothing matched. In text mode the words are stemmed and accents ignored, so "geneve" finds "Genève"; regex mode matches literally.'
-              : 'Type to search, or pick a kind to browse the newest of it.'}
+              ? 'Nothing matched. In text mode words are stemmed and accents ignored, so "geneve" finds "Genève". Put a phrase in double quotes to require the words together, and prefix ~ to exclude one. Regex mode matches literally.'
+              : 'Type to search, or pick a kind to browse the newest of it. Double quotes hold a phrase together; ~ before a word or phrase excludes it.'}
           </p>
         </div>
       )}

@@ -109,3 +109,100 @@ def test_the_configuration_switch_is_a_literal_regconfig():
     sql = s._config_case("lang")
     assert "::regconfig" in sql
     assert "%s" not in sql
+
+
+# --------------------------------------------------------------------------- #
+# query grammar: quoted phrases and ~ exclusions
+# --------------------------------------------------------------------------- #
+
+def test_bare_words_are_separate_terms():
+    p = s.parse_terms("grand remplacement")
+    assert p["terms"] == ["grand", "remplacement"]
+    assert p["phrases"] == []
+
+
+def test_quotes_make_one_block():
+    # Without this the two words are ANDed, and an article using them a
+    # paragraph apart matches -- a different claim about the corpus.
+    p = s.parse_terms('"grand remplacement"')
+    assert p["phrases"] == ["grand remplacement"]
+    assert p["terms"] == []
+
+
+def test_a_tilde_excludes_a_word():
+    p = s.parse_terms("chat ~chien")
+    assert p["terms"] == ["chat"]
+    assert p["not_terms"] == ["chien"]
+
+
+def test_a_tilde_before_a_quote_excludes_the_whole_phrase():
+    # Quoting binds tighter than negation: this must not exclude "petit" and
+    # then search for "chat".
+    p = s.parse_terms('~"petit chat"')
+    assert p["not_phrases"] == ["petit chat"]
+    assert p["terms"] == [] and p["not_terms"] == []
+
+
+def test_phrases_terms_and_exclusions_mix():
+    p = s.parse_terms('geneve "conseil federal" ~vaud ~"petit chat"')
+    assert p["terms"] == ["geneve"]
+    assert p["phrases"] == ["conseil federal"]
+    assert p["not_terms"] == ["vaud"]
+    assert p["not_phrases"] == ["petit chat"]
+
+
+def test_a_lone_tilde_is_not_a_term():
+    assert s.parse_terms("~") == {"phrases": [], "terms": [],
+                                  "not_phrases": [], "not_terms": []}
+
+
+def test_empty_quotes_are_dropped():
+    assert s.parse_terms('""').get("phrases") == []
+
+
+def test_inner_spacing_does_not_change_a_phrase():
+    # "regardless of the spaces": the block is the words, not the whitespace.
+    a = s.parse_terms('"grand remplacement"')["phrases"][0]
+    b = s.parse_terms('"grand    remplacement"')["phrases"][0]
+    assert a.split() == b.split()
+
+
+def test_the_builder_emits_adjacency_for_a_phrase():
+    params = {}
+    sql = s._query_sql(s.parse_terms('"grand remplacement"'),
+                       "'french_ua'::regconfig", params)
+    assert "phraseto_tsquery" in sql
+    assert params["p0"] == "grand remplacement"
+
+
+def test_the_builder_emits_negation_for_an_exclusion():
+    params = {}
+    sql = s._query_sql(s.parse_terms("chat ~chien"), "'french_ua'::regconfig", params)
+    assert "!!plainto_tsquery" in sql
+    assert params["nt0"] == "chien"
+
+
+def test_the_positive_only_build_drops_exclusions():
+    # ts_headline must not be asked to mark a term that is by definition
+    # absent, or the snippet is chosen for the wrong reason.
+    params = {}
+    sql = s._query_sql(s.parse_terms("chat ~chien"), "'french_ua'::regconfig",
+                       params, positive_only=True)
+    assert "!!" not in sql
+    assert "nt0" not in params
+
+
+def test_a_query_of_only_stopwords_builds_nothing():
+    # Returns None so the caller can fall back rather than emit "()".
+    assert s._query_sql({"phrases": [], "terms": [], "not_phrases": [],
+                         "not_terms": []}, "'french_ua'::regconfig", {}) is None
+
+
+def test_every_typed_value_is_a_bound_parameter():
+    # The grammar takes arbitrary text from a search box; none of it may reach
+    # SQL as literal text.
+    params = {}
+    sql = s._query_sql(s.parse_terms("""a'b "c'd" ~e'f"""),
+                       "'french_ua'::regconfig", params)
+    assert "'" not in sql.replace("'french_ua'::regconfig", "")
+    assert any("'" in v for v in params.values())
