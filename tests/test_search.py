@@ -206,3 +206,37 @@ def test_every_typed_value_is_a_bound_parameter():
                        "'french_ua'::regconfig", params)
     assert "'" not in sql.replace("'french_ua'::regconfig", "")
     assert any("'" in v for v in params.values())
+
+
+# --------------------------------------------------------------------------- #
+# credentials
+# --------------------------------------------------------------------------- #
+
+def test_the_secret_search_path_stays_inside_this_project():
+    """A missing credential must be an error, never another project's.
+
+    `~/Documents/MATLAB` was on this list and holds AlgoTrade's
+    `secret_postgre.env` under the identical name. Moving this project's secret
+    made the running daemon fall through to it and connect to MediaTracker's
+    database as AlgoTrade's role -- which could connect, owned nothing, and
+    answered "permission denied for table search_doc" to every API caller.
+    """
+    from pathlib import Path
+
+    from mediatracker import db
+
+    home = Path.home()
+    allowed = {
+        home / ".config" / "mediatracker" / "secrets",
+        home / ".config" / "mediatracker",
+        Path(db.__file__).resolve().parent.parent,
+    }
+    for path in db._SECRET_SEARCH:
+        assert path in allowed, (
+            f"{path} is outside this project; a credential search that reaches "
+            f"another project's files borrows its identity instead of failing")
+
+
+def test_the_project_owned_location_is_searched_first():
+    from mediatracker import db
+    assert db._SECRET_SEARCH[0].name == "secrets"

@@ -75,13 +75,19 @@ def paper_window(days: int = 2, tz: str = PAPER_TZ) -> date:
 # Search path for the secret file, first match wins. Mirrors algotrade's habit of
 # keeping secrets under the user's private dirs, never in the repo.
 _SECRET_NAME = "secret_postgre.env"
+# Only this project's own locations. `~/Documents/MATLAB` used to be in this
+# list and had to come out: it holds AlgoTrade's credential file under the same
+# name, so a missing secret here did not fail -- it silently fell through and
+# connected to MediaTracker's database as AlgoTrade's role. That is how the API
+# came to answer "permission denied for table search_doc" to Ariane: the role
+# could connect but owned nothing. A credential that cannot be found must be an
+# error, never another project's credential.
 _SECRET_SEARCH = (
     # The estate convention (ONBOARDING.md §3): secrets live in a `secrets/`
-    # subdirectory, mode 600, and that tree goes to the offline drive only.
+    # subdirectory, mode 600, backed up to the offline drive and never the NAS.
     Path.home() / ".config" / "mediatracker" / "secrets",
     Path.home() / ".config" / "mediatracker",          # where it used to live
     Path(__file__).resolve().parent.parent,            # repo root (gitignored)
-    Path.home() / "Documents" / "MATLAB",
 )
 
 
