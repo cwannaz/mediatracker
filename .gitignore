@@ -23,3 +23,7 @@ webapp/.vite/
 *.swp
 .idea/
 .vscode/
+
+# Local scratch: screenshots, probe scripts, one-off measurements. Excluded
+# from backup too (.ryzen/backup.toml) — worthless to a restore.
+scratchpad/

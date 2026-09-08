@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Write a restorable dump of the MediaTracker corpus into OUTDIR.
+
+Run by ryzen-control as `scripts/backup-dump <OUTDIR>` from the repo root. See
+~/ryzen-control/ryzen-control/BACKUP_HOOK.md for the contract.
+
+WHAT IS AND IS NOT IN HERE
+--------------------------
+Only the Postgres database, because that is the only state a file copy cannot
+safely take: ~3.6M comments, ~340k articles, the image *metadata*, the entity
+extraction, and -- the part with no other copy anywhere -- the hand-written
+records (personas, notes, accounts) and the LLM-derived author profiles. The
+crawl can be re-run to rebuild the rest; those cannot be re-derived at all.
+
+Deliberately NOT dumped:
+  * the image blob store (~92 GB on ZFS). It is already files, so re-exporting
+    it here would violate the "don't dump what's already files" rule, and it is
+    content-addressed and re-fetchable from URLs the database still holds.
+    Whether it is copied anywhere is ryzen-control's call, not this hook's.
+  * the mirrored sitemaps and the Wayback CDX indexes. Also already files;
+    asked for as includes instead.
+
+This script is standalone on purpose: it imports nothing from `mediatracker`,
+so a broken working tree still yields a good backup. It reads its own
+credentials; ryzen-control never holds them.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+SECRET_NAME = "secret_postgre.env"
+SECRET_SEARCH = (
+    Path.home() / ".config" / "mediatracker" / "secrets",
+    Path.home() / ".config" / "mediatracker",
+)
+REPO = Path(__file__).resolve().parent.parent
+
+
+def fail(msg: str) -> "NoReturn":  # noqa: F821
+    print(f"backup-dump: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def read_env(path: Path) -> dict:
+    """Parse KEY=VALUE, tolerating CRLF and quotes.
+
+    Parsed rather than sourced: BACKUP_HOOK.md warns that some secret files
+    carry CRLF line endings and `source` chokes on them, and sourcing an
+    untrusted file executes it.
+    """
+    out = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip().lstrip("﻿")
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def credentials() -> tuple[str, str]:
+    for base in SECRET_SEARCH:
+        p = base / SECRET_NAME
+        if p.is_file():
+            vals = read_env(p)
+            user, pw = vals.get("POSTGRE_USER"), vals.get("POSTGRE_PASSWORD")
+            if user and pw:
+                return user, pw
+    fail(f"no Postgres credentials found in {[str(b) for b in SECRET_SEARCH]}")
+
+
+def target() -> tuple[str, str, int]:
+    """Database name, host and port, read from the app's own config.
+
+    Taken from config.toml rather than hardcoded so the dump cannot quietly
+    start backing up a different database than the one the daemon writes to.
+    """
+    cfg = REPO / "config.toml"
+    pg = {}
+    if cfg.is_file():
+        try:
+            pg = tomllib.loads(cfg.read_text()).get("postgres", {})
+        except (tomllib.TOMLDecodeError, OSError) as exc:
+            fail(f"cannot read {cfg}: {exc}")
+    return (pg.get("dbname", "MediaTracker-Journals"),
+            pg.get("host", "127.0.0.1"), int(pg.get("port", 5432)))
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        fail("usage: backup-dump <OUTDIR>")
+    out = Path(argv[1])
+    if not out.is_dir():
+        fail(f"{out} is not a directory")
+
+    user, password = credentials()
+    dbname, host, port = target()
+    dump = out / "mediatracker-journals.dump"
+
+    env = dict(os.environ)
+    env["PGPASSWORD"] = password          # never written to disk or logged
+    cmd = [
+        "pg_dump",
+        "--format=custom",                # compressed, selective on restore
+        "--compress=6",
+        "--no-owner", "--no-privileges",   # restorable as any role
+        "--serializable-deferrable",       # a consistent point-in-time view
+        "--host", host, "--port", str(port),
+        "--username", user, "--dbname", dbname,
+        "--file", str(dump),
+    ]
+    print(f"backup-dump: dumping {dbname} from {host}:{port}", flush=True)
+    try:
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                           timeout=6 * 3600)
+    except FileNotFoundError:
+        fail("pg_dump not on PATH")
+    except subprocess.TimeoutExpired:
+        fail("pg_dump exceeded 6 hours")
+    if r.returncode != 0:
+        # stderr only: the command line holds no secret (the password went
+        # through the environment) but print nothing from the environment.
+        fail(f"pg_dump exited {r.returncode}: {r.stderr.strip()[:800]}")
+    if not dump.is_file() or dump.stat().st_size == 0:
+        fail("pg_dump reported success but wrote nothing")
+
+    size = dump.stat().st_size
+    (out / "RESTORE.txt").write_text(
+        f"createdb {dbname} && pg_restore --no-owner --dbname={dbname} "
+        f"{dump.name}   # {size / 1e9:.1f} GB custom-format dump; "
+        f"image blobs and sitemaps are NOT here (see scripts/backup-dump)\n")
+
+    # SHA256SUMS so ryzen-control's integrity record covers the dump and a
+    # restore drill can verify it with `sha256sum -c`.
+    lines = []
+    for f in sorted(out.iterdir()):
+        if f.name == "SHA256SUMS" or not f.is_file():
+            continue
+        h = hashlib.sha256()
+        with f.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        lines.append(f"{h.hexdigest()}  {f.name}")
+    (out / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+
+    print(f"backup-dump: wrote {dump.name} ({size / 1e9:.2f} GB) + "
+          f"SHA256SUMS + RESTORE.txt", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

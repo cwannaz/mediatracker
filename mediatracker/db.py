@@ -76,8 +76,11 @@ def paper_window(days: int = 2, tz: str = PAPER_TZ) -> date:
 # keeping secrets under the user's private dirs, never in the repo.
 _SECRET_NAME = "secret_postgre.env"
 _SECRET_SEARCH = (
-    Path(__file__).resolve().parent.parent,           # repo root (gitignored)
-    Path.home() / ".config" / "mediatracker",
+    # The estate convention (ONBOARDING.md §3): secrets live in a `secrets/`
+    # subdirectory, mode 600, and that tree goes to the offline drive only.
+    Path.home() / ".config" / "mediatracker" / "secrets",
+    Path.home() / ".config" / "mediatracker",          # where it used to live
+    Path(__file__).resolve().parent.parent,            # repo root (gitignored)
     Path.home() / "Documents" / "MATLAB",
 )
 

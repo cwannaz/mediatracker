@@ -1,0 +1,31 @@
+# MediaTracker — what ryzen-control needs from this project.
+# Contract: ~/ryzen-control/ryzen-control/BACKUP_HOOK.md
+
+# The Postgres corpus. It is the only state a file copy cannot safely take,
+# and it holds the one thing nothing can rebuild: the hand-written records
+# (personas, notes, accounts) and the entity extraction, which cost days of
+# model time. The crawl can regenerate articles and comments, slowly; it
+# cannot regenerate a judgement someone typed.
+dump = "scripts/backup-dump"
+
+# Weekly. The database grows continuously, but a week's loss costs crawl time
+# rather than knowledge, and the dump is several GB — daily would spend a lot
+# of NAS for a small reduction in exposure. Worth revisiting if the corpus
+# ever holds something that cannot be re-fetched at all.
+frequency = "weekly"
+
+# The dump reaches the NAS. It holds public newspaper comments and inferred
+# author profiles, not credentials — see the note to ryzen-control on the
+# relay if that judgement should be revisited.
+db_offline = false
+
+exclude = [
+  # Regenerable from package-lock.json, and 87 MB of the 98 MB repo.
+  "node_modules",
+  # Screenshots, probe scripts and one-off measurements. Deliberately
+  # untracked, and worth nothing to a restore.
+  "/scratchpad",
+  "__pycache__",
+  "*.pyc",
+  ".pytest_cache",
+]
