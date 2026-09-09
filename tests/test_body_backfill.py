@@ -190,3 +190,22 @@ def test_without_min_capture_nothing_is_filtered_by_date():
     bb.candidates(conn)
     sql, params = conn.sql[-1]
     assert "min_capture" not in sql and "min_capture" not in params
+
+
+def test_a_failed_row_is_skipped_by_default():
+    """One stint must not loop on a row the archive would not serve it."""
+    conn = FakeConn()
+    bb.candidates(conn)
+    sql, _ = conn.sql[-1]
+    assert "NOT (s.raw_meta ? %(marker)s)" in sql
+    assert "failed:" not in sql
+
+
+def test_retry_failed_reopens_them():
+    """Most failures are URLError -- the archive briefly unreachable, which is
+    not a verdict about the article. Retiring those permanently would silently
+    drop about 6% of the backlog."""
+    conn = FakeConn()
+    bb.candidates(conn, retry_failed=True)
+    sql, _ = conn.sql[-1]
+    assert "LIKE 'failed:%'" in sql or "LIKE 'failed:%%'" in sql

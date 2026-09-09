@@ -60,7 +60,7 @@ class OutOfTime(RuntimeError):
 
 
 def candidates(conn, *, journal: str | None = None, limit: int | None = None,
-               min_capture: str | None = None) -> list[tuple]:
+               min_capture: str | None = None, retry_failed: bool = False) -> list[tuple]:
     """Bodyless wayback snapshots that have not been attempted yet.
 
     Ordered by capture so a stint works through one era at a time: the eras
@@ -73,6 +73,12 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None,
     already says would cost 54 hours and 64,000 requests on a donated server.
     The gate stays the authority on what is readable -- this only avoids asking
     for what is known unreadable.
+
+    `retry_failed` re-opens rows a previous stint could not fetch. A failure is
+    marked so one stint does not loop on it, but most of them are URLError --
+    the archive being briefly unreachable, which is not a verdict about the
+    article. Left permanent that would silently drop about 6% of the backlog,
+    so the marker retires a row from the CURRENT pass, not from the job.
     """
     sql = """
         SELECT s.id, a.id, j.slug,
@@ -84,8 +90,10 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None,
         WHERE a.origin = 'wayback'
           AND (s.body_text IS NULL OR length(s.body_text) < 200)
           AND s.raw_meta->>'capture' IS NOT NULL
-          AND NOT (s.raw_meta ? %(marker)s)
-    """
+          AND (NOT (s.raw_meta ? %(marker)s)
+               {retry})
+    """.format(retry="OR s.raw_meta->>'body_backfill' LIKE 'failed:%%'"
+                if retry_failed else "")
     params: dict = {"marker": MARKER}
     if journal:
         sql += " AND j.slug = %(journal)s"
@@ -140,9 +148,11 @@ def store_body(conn, *, snap_id: int, article_id: str, body: str,
 
 def run(conn, *, client: WaybackClient, journal: str | None = None,
         limit: int | None = None, max_hours: float | None = None,
-        min_capture: str | None = None, progress=None) -> dict:
+        min_capture: str | None = None, retry_failed: bool = False,
+        progress=None) -> dict:
     """Fetch and store bodies until the list, the budget or the archive ends."""
-    rows = candidates(conn, journal=journal, limit=limit, min_capture=min_capture)
+    rows = candidates(conn, journal=journal, limit=limit, min_capture=min_capture,
+                      retry_failed=retry_failed)
     log.info("body backfill: %d snapshots to attempt%s",
              len(rows), f" ({journal})" if journal else "")
     st = Stats()
@@ -211,6 +221,8 @@ def main(argv=None) -> int:
     p.add_argument("--max-hours", type=float, default=None)
     p.add_argument("--min-capture", default=None,
                    help="skip captures older than this YYYY[MM...] prefix")
+    p.add_argument("--retry-failed", action="store_true",
+                   help="re-open rows a previous stint could not fetch")
     p.add_argument("--status", action="store_true")
     a = p.parse_args(argv)
 
@@ -243,7 +255,8 @@ def main(argv=None) -> int:
 
     try:
         out = run(conn, client=client, journal=a.journal, limit=a.limit,
-                  max_hours=a.max_hours, min_capture=a.min_capture, progress=show)
+                  max_hours=a.max_hours, min_capture=a.min_capture,
+                  retry_failed=a.retry_failed, progress=show)
     except OutOfTime as stop:
         out = stop.args[0]
         out["stopped"] = "budget"
