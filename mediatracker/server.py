@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from functools import partial
 
 import websockets
 
@@ -28,6 +29,13 @@ from .scanner import ScanEngine
 from .store import JsonlStore
 
 log = logging.getLogger(__name__)
+
+# How often the daemon folds newly crawled rows into the search index, and
+# how much it will do in one pass. The index is watermark-driven, so a
+# capped pass is not a partial result -- it just resumes at the next tick.
+INDEX_EVERY_S = 900
+INDEX_MAX_BATCHES = 12
+
 
 
 class Server:
@@ -85,10 +93,52 @@ class Server:
             except Exception as exc:
                 log.warning("API unavailable: %s", exc)
 
+        keeper = asyncio.create_task(self._index_keeper())
+
         async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
                      self.cfg.host, self.cfg.port, ", ".join(sources.all_slugs()) or "none")
             await asyncio.Future()  # run forever
+
+    async def _index_keeper(self) -> None:
+        """Fold newly crawled rows into the search index, forever.
+
+        Nothing else calls search.refresh(): without this the index freezes at
+        whatever the last manual run indexed, and both the web app and the
+        public API keep answering confidently from a stale corpus. Silent
+        staleness is the worst failure a search box can have.
+
+        Its own connection, and to_thread: refresh commits batch after batch,
+        which would otherwise block the single event loop the web app is
+        answered on, and psycopg connections are not for sharing between
+        threads -- self.search_conn is busy serving queries.
+        """
+        conn = None
+        while True:
+            await asyncio.sleep(INDEX_EVERY_S)
+            try:
+                if conn is None:
+                    conn = await asyncio.to_thread(db.connect, self.cfg)
+                if conn is None:
+                    continue
+                done = await asyncio.to_thread(
+                    partial(search.refresh, conn, max_batches=INDEX_MAX_BATCHES))
+                added = sum(d.get("docs", 0) for d in done.values())
+                if added:
+                    log.info("search index: +%s docs (%s)", f"{added:,}",
+                             ", ".join(f"{k} {v['docs']:,}"
+                                       for k, v in done.items() if v.get("docs")))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # A failing index must not take the daemon down with it.
+                log.warning("search index refresh failed: %s", exc)
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
 
     def _seed_journals(self) -> None:
         """Ensure a journal row (with a default schedule) exists for each source.
