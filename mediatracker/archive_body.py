@@ -55,6 +55,14 @@ _COMMENT_REGION = re.compile(
 )
 
 _DROP = re.compile(r'(?is)<(script|style|noscript|head|form|select)[^>]*>.*?</\1>')
+
+# Elements the page itself hides. The Newsnetz template keeps an email-form
+# confirmation in a display:none div, so every recovered body opened with
+# "Votre email a ete envoye." -- text no reader ever saw, on its way into
+# the search index and the entity extractor.
+_HIDDEN = re.compile(
+    r'(?is)<(div|p|span|section)\b[^>]*style\s*=\s*["\'][^"\']*'
+    r'display\s*:\s*none[^"\']*["\'][^>]*>.*?</\1>')
 # <p> only. Headline and subhead have their own columns, and reading h2 here
 # put the headline back into the body of every page that repeats it.
 _PARA = re.compile(r'(?is)<(p)\b([^>]*)>(.*?)</\1>')
@@ -113,6 +121,7 @@ def extract_body(page: str) -> str | None:
     if not page:
         return None
     page = _DROP.sub(" ", page)
+    page = _HIDDEN.sub(" ", page)
     page = _strip_comment_regions(page)
 
     parts: list[str] = []

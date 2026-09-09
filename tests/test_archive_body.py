@@ -104,3 +104,16 @@ def test_the_body_is_capped():
     from mediatracker.archive_body import MAX_CHARS
     got = extract_body(page(f"<p>{LONG * 400}</p>"))
     assert len(got) <= MAX_CHARS
+
+
+def test_hidden_elements_are_not_body_text():
+    """The Newsnetz template hides an email-form confirmation in a display:none
+    div. Every recovered body opened with 'Votre email a ete envoye.' -- text no
+    reader ever saw, heading for the search index and the entity extractor."""
+    doc = page("<div style='display:none;'><p>Votre email a ete envoye et sera "
+               "traite dans les meilleurs delais par nos equipes techniques.</p></div>"
+               f"<p>{LONG}</p>")
+    got = extract_body(doc)
+    assert got is not None
+    assert "Votre email" not in got
+    assert "Conseil federal" in got
