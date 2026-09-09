@@ -59,11 +59,20 @@ class OutOfTime(RuntimeError):
     """The stint's budget is spent; progress is committed and resumable."""
 
 
-def candidates(conn, *, journal: str | None = None, limit: int | None = None) -> list[tuple]:
+def candidates(conn, *, journal: str | None = None, limit: int | None = None,
+               min_capture: str | None = None) -> list[tuple]:
     """Bodyless wayback snapshots that have not been attempted yet.
 
     Ordered by capture so a stint works through one era at a time: the eras
     differ in yield, and mixing them makes a run's progress unreadable.
+
+    `min_capture` skips captures older than a "YYYY" (or fuller) prefix. The
+    runtime gate already refuses the portal era, but only after paying for the
+    page: measured, Le Matin's pre-2012 captures are 63,852 of the backlog and
+    every one of them is refused. Fetching them to learn what the capture date
+    already says would cost 54 hours and 64,000 requests on a donated server.
+    The gate stays the authority on what is readable -- this only avoids asking
+    for what is known unreadable.
     """
     sql = """
         SELECT s.id, a.id, j.slug,
@@ -81,6 +90,9 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None) ->
     if journal:
         sql += " AND j.slug = %(journal)s"
         params["journal"] = journal
+    if min_capture:
+        sql += " AND s.raw_meta->>'capture' >= %(min_capture)s"
+        params["min_capture"] = min_capture
     sql += " ORDER BY s.raw_meta->>'capture'"
     if limit:
         sql += " LIMIT %(limit)s"
@@ -128,9 +140,9 @@ def store_body(conn, *, snap_id: int, article_id: str, body: str,
 
 def run(conn, *, client: WaybackClient, journal: str | None = None,
         limit: int | None = None, max_hours: float | None = None,
-        progress=None) -> dict:
+        min_capture: str | None = None, progress=None) -> dict:
     """Fetch and store bodies until the list, the budget or the archive ends."""
-    rows = candidates(conn, journal=journal, limit=limit)
+    rows = candidates(conn, journal=journal, limit=limit, min_capture=min_capture)
     log.info("body backfill: %d snapshots to attempt%s",
              len(rows), f" ({journal})" if journal else "")
     st = Stats()
@@ -197,6 +209,8 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--delay", type=float, default=2.0)
     p.add_argument("--max-hours", type=float, default=None)
+    p.add_argument("--min-capture", default=None,
+                   help="skip captures older than this YYYY[MM...] prefix")
     p.add_argument("--status", action="store_true")
     a = p.parse_args(argv)
 
@@ -229,7 +243,7 @@ def main(argv=None) -> int:
 
     try:
         out = run(conn, client=client, journal=a.journal, limit=a.limit,
-                  max_hours=a.max_hours, progress=show)
+                  max_hours=a.max_hours, min_capture=a.min_capture, progress=show)
     except OutOfTime as stop:
         out = stop.args[0]
         out["stopped"] = "budget"

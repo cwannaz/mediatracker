@@ -172,3 +172,21 @@ def test_a_newsnetz_article_still_passes_the_gate(monkeypatch):
     page = ARTICLE.replace("<body>", "<body><div class='commentRedesign'></div>")
     out = bb.run(conn, client=FakeClient({"20150101000000": page}))
     assert out["bodies"] == 1
+
+
+def test_min_capture_is_pushed_into_the_query():
+    """Le Matin's pre-2012 captures are 63,852 rows the gate always refuses.
+    Asking the archive for them anyway would cost 54 hours and 64,000 requests
+    to learn what the capture date already says."""
+    conn = FakeConn()
+    bb.candidates(conn, min_capture="2012")
+    sql, params = conn.sql[-1]
+    assert "raw_meta->>'capture' >= %(min_capture)s" in sql
+    assert params["min_capture"] == "2012"
+
+
+def test_without_min_capture_nothing_is_filtered_by_date():
+    conn = FakeConn()
+    bb.candidates(conn)
+    sql, params = conn.sql[-1]
+    assert "min_capture" not in sql and "min_capture" not in params
