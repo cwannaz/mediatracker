@@ -199,3 +199,97 @@ def test_a_clean_run_reports_itself_complete(monkeypatch):
         def commit(self): pass
     out = e.run(_Conn())
     assert out["complete"] is True and out["unanswered"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# which subscription the calls bill
+# --------------------------------------------------------------------------- #
+
+class _Done:
+    def __init__(self, stdout="", returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
+def _fresh(monkeypatch, result):
+    """claude_env with its cache cleared and the account tool stubbed."""
+    monkeypatch.setattr(e, "_CLAUDE_ENV", None)
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(args)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(e.subprocess, "run", fake_run)
+    return e.claude_env(refresh=True), calls
+
+
+def test_an_exported_config_dir_is_applied(monkeypatch):
+    env, calls = _fresh(monkeypatch,
+                        _Done("export CLAUDE_CONFIG_DIR=/home/cwannaz/.claude2\n"))
+    assert env["CLAUDE_CONFIG_DIR"] == "/home/cwannaz/.claude2"
+    assert calls[0][:2] == [e.ACCOUNT_TOOL, "env"]
+
+
+def test_unset_removes_it_rather_than_pointing_at_the_default_dir(monkeypatch):
+    """The default account needs CLAUDE_CONFIG_DIR ABSENT. Setting it to
+    ~/.claude is not the same thing, and a stale inherited value must go."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/cwannaz/.claude2")
+    env, _ = _fresh(monkeypatch, _Done("unset CLAUDE_CONFIG_DIR\n"))
+    assert "CLAUDE_CONFIG_DIR" not in env
+
+
+def test_quotes_around_the_value_are_stripped(monkeypatch):
+    env, _ = _fresh(monkeypatch, _Done('export CLAUDE_CONFIG_DIR="/home/cwannaz/.claude2"\n'))
+    assert env["CLAUDE_CONFIG_DIR"] == "/home/cwannaz/.claude2"
+
+
+def test_a_missing_account_tool_inherits_and_warns(monkeypatch, caplog):
+    with caplog.at_level("WARNING"):
+        env, _ = _fresh(monkeypatch, FileNotFoundError("no such tool"))
+    assert isinstance(env, dict)
+    assert any("INHERITING" in r.message or "INHERITING" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_a_failing_account_tool_inherits_and_warns(monkeypatch, caplog):
+    with caplog.at_level("WARNING"):
+        env, _ = _fresh(monkeypatch, _Done("", returncode=2, stderr="boom"))
+    assert isinstance(env, dict)
+    assert any("INHERITING" in r.getMessage() for r in caplog.records)
+
+
+def test_the_answer_is_cached_not_asked_per_batch(monkeypatch):
+    """One resolution per process: the account only changes when the project is
+    moved, and shelling out per call would cost a process per batch."""
+    monkeypatch.setattr(e, "_CLAUDE_ENV", None)
+    n = 0
+
+    def fake_run(args, **kw):
+        nonlocal n
+        n += 1
+        return _Done("export CLAUDE_CONFIG_DIR=/x\n")
+
+    monkeypatch.setattr(e.subprocess, "run", fake_run)
+    e.claude_env()
+    e.claude_env()
+    e.claude_env()
+    assert n == 1
+
+
+def test_the_batch_call_disables_session_persistence_and_passes_env(monkeypatch):
+    """Each -p run otherwise leaves a transcript nobody reads; 10,903 of them,
+    3.7 GB, inside the fleet backup."""
+    seen = {}
+    monkeypatch.setattr(e, "_CLAUDE_ENV", {"MARKER": "1"})
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        seen["env"] = kw.get("env")
+        return _Done('{"result": "{}"}')
+
+    monkeypatch.setattr(e.subprocess, "run", fake_run)
+    e.extract([{"kind": "article", "ref": "a1", "title": "t", "body": "b"}])
+    assert "--no-session-persistence" in seen["args"]
+    assert seen["env"] == {"MARKER": "1"}, "the resolved account env must be passed"

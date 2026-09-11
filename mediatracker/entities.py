@@ -58,6 +58,15 @@ log = logging.getLogger(__name__)
 
 MODEL = "sonnet"          # alias; resolves to the current Sonnet 5
 
+# Which subscription these calls bill. Asked, never hardcoded: the answer moves
+# when the project moves, and a literal ~/.claude2 here would have to be edited
+# by hand on the next move -- silently billing the wrong account until someone
+# noticed. `claude_account env <project>` emits either an export or an unset,
+# and the unset matters: the default account requires CLAUDE_CONFIG_DIR to be
+# ABSENT, not set to ~/.claude, and it also clears a stale inherited value.
+ACCOUNT_TOOL = "claude_account"
+PROJECT = "media-tracker"
+
 KINDS = ("person", "organization", "place", "event", "topic")
 
 # Entities cluster in the lede: who, what and where are named in the opening
@@ -223,6 +232,59 @@ def available() -> tuple[bool, str]:
     return True, (p.stdout or "").strip()
 
 
+_CLAUDE_ENV: dict | None = None
+
+
+def claude_env(refresh: bool = False) -> dict:
+    """The environment `claude -p` should run in, as the account tool dictates.
+
+    Without this the account comes from whoever started the process: account 1
+    under systemd, account 2 from a terminal tab, for the same code and the
+    same work. Resolved once per process and cached -- the answer only changes
+    when the project is moved, and that does not happen mid-run.
+    """
+    global _CLAUDE_ENV
+    if _CLAUDE_ENV is not None and not refresh:
+        return _CLAUDE_ENV
+    env = dict(os.environ)
+    try:
+        out = subprocess.run([ACCOUNT_TOOL, "env", PROJECT],
+                             capture_output=True, text=True, timeout=30,
+                             stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Inheriting is what happened before this existed, so it is survivable
+        # -- but it is the bug, so say so loudly rather than bill whichever
+        # account happened to start us.
+        log.warning("%s unavailable (%s); INHERITING the caller's account, "
+                    "which may bill the wrong subscription", ACCOUNT_TOOL, exc)
+        _CLAUDE_ENV = env
+        return env
+    if out.returncode != 0:
+        log.warning("%s env %s failed (%s): %.200s; INHERITING the caller's "
+                    "account", ACCOUNT_TOOL, PROJECT, out.returncode,
+                    (out.stderr or out.stdout or "").strip())
+        _CLAUDE_ENV = env
+        return env
+
+    applied = None
+    for line in (out.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("export CLAUDE_CONFIG_DIR="):
+            value = line.split("=", 1)[1].strip().strip("\"'")
+            env["CLAUDE_CONFIG_DIR"] = value
+            applied = value
+        elif line.startswith("unset CLAUDE_CONFIG_DIR"):
+            env.pop("CLAUDE_CONFIG_DIR", None)
+            applied = "(unset: default account)"
+    if applied is None:
+        log.warning("%s env %s said nothing about CLAUDE_CONFIG_DIR: %.200s",
+                    ACCOUNT_TOOL, PROJECT, (out.stdout or "").strip())
+    else:
+        log.info("claude calls will use CLAUDE_CONFIG_DIR=%s", applied)
+    _CLAUDE_ENV = env
+    return env
+
+
 def _prompt_for(batch: list[dict]) -> str:
     parts = [SYSTEM, ""]
     for i, a in enumerate(batch, 1):
@@ -246,10 +308,15 @@ def extract(batch: list[dict], *, model: str = MODEL,
         try:
             p = subprocess.run(
                 ["claude", "-p", "--model", model,
+                 # Every -p run otherwise writes a session transcript nobody
+                 # will read: 10,903 files and 3.7 GB accumulated, and the
+                 # tree is inside the fleet backup, so each one was copied to
+                 # the NAS and to the offline drive on every run.
+                 "--no-session-persistence",
                  "--output-format", "json", "--json-schema", json.dumps(SCHEMA),
                  prompt],
                 capture_output=True, text=True, timeout=timeout,
-                stdin=subprocess.DEVNULL)
+                env=claude_env(), stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             log.warning("call timed out after %.0fs (attempt %d)", timeout, attempt + 1)
             p = None
