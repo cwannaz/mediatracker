@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import unicodedata
 import subprocess
@@ -66,6 +67,27 @@ MODEL = "sonnet"          # alias; resolves to the current Sonnet 5
 # ABSENT, not set to ~/.claude, and it also clears a stale inherited value.
 ACCOUNT_TOOL = "claude_account"
 PROJECT = "media-tracker"
+# Where the tool lives when PATH does not say. A systemd unit does not inherit
+# the login shell's PATH, so under systemd `claude_account` was not found and
+# the calls fell back to INHERITING -- which under systemd is account 1, the
+# wrong subscription. That is the exact fault this module is meant to prevent,
+# so the lookup must not depend on who launched the process.
+ACCOUNT_TOOL_FALLBACKS = (
+    "/home/cwannaz/shared/bin/claude_account",
+    os.path.expanduser("~/shared/bin/claude_account"),
+    os.path.expanduser("~/.local/bin/claude_account"),
+)
+
+
+def _account_tool() -> str | None:
+    """Absolute path to the account tool, or None if it truly is not here."""
+    found = shutil.which(ACCOUNT_TOOL)
+    if found:
+        return found
+    for cand in ACCOUNT_TOOL_FALLBACKS:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
 
 KINDS = ("person", "organization", "place", "event", "topic")
 
@@ -247,8 +269,15 @@ def claude_env(refresh: bool = False) -> dict:
     if _CLAUDE_ENV is not None and not refresh:
         return _CLAUDE_ENV
     env = dict(os.environ)
+    tool = _account_tool()
+    if tool is None:
+        log.warning("%s not found on PATH or at %s; INHERITING the caller's "
+                    "account, which may bill the wrong subscription",
+                    ACCOUNT_TOOL, ", ".join(ACCOUNT_TOOL_FALLBACKS))
+        _CLAUDE_ENV = env
+        return env
     try:
-        out = subprocess.run([ACCOUNT_TOOL, "env", PROJECT],
+        out = subprocess.run([tool, "env", PROJECT],
                              capture_output=True, text=True, timeout=30,
                              stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as exc:

@@ -229,7 +229,9 @@ def test_an_exported_config_dir_is_applied(monkeypatch):
     env, calls = _fresh(monkeypatch,
                         _Done("export CLAUDE_CONFIG_DIR=/home/cwannaz/.claude2\n"))
     assert env["CLAUDE_CONFIG_DIR"] == "/home/cwannaz/.claude2"
-    assert calls[0][:2] == [e.ACCOUNT_TOOL, "env"]
+    # argv[0] is an absolute path: PATH is not trustworthy under systemd.
+    assert calls[0][0].endswith(e.ACCOUNT_TOOL)
+    assert calls[0][1:] == ["env", e.PROJECT]
 
 
 def test_unset_removes_it_rather_than_pointing_at_the_default_dir(monkeypatch):
@@ -293,3 +295,20 @@ def test_the_batch_call_disables_session_persistence_and_passes_env(monkeypatch)
     e.extract([{"kind": "article", "ref": "a1", "title": "t", "body": "b"}])
     assert "--no-session-persistence" in seen["args"]
     assert seen["env"] == {"MARKER": "1"}, "the resolved account env must be passed"
+
+
+def test_the_account_tool_is_found_off_path(monkeypatch):
+    """A systemd unit does not inherit the login shell's PATH. When that was
+    left to PATH alone the calls silently fell back to account 1 under
+    systemd -- the exact fault this module exists to prevent."""
+    monkeypatch.setattr(e.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(e, "ACCOUNT_TOOL_FALLBACKS", ("/opt/somewhere/claude_account",))
+    monkeypatch.setattr(e.os.path, "isfile", lambda p: p == "/opt/somewhere/claude_account")
+    monkeypatch.setattr(e.os, "access", lambda p, m: p == "/opt/somewhere/claude_account")
+    assert e._account_tool() == "/opt/somewhere/claude_account"
+
+
+def test_a_genuinely_absent_tool_returns_none(monkeypatch):
+    monkeypatch.setattr(e.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(e, "ACCOUNT_TOOL_FALLBACKS", ())
+    assert e._account_tool() is None
