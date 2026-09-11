@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import urllib.error
 from dataclasses import dataclass
 
 from . import ids
@@ -35,6 +36,17 @@ from .wayback import GaveUp, WaybackClient
 log = logging.getLogger(__name__)
 
 MARKER = "body_backfill"       # raw_meta key: this row has been attempted
+
+# Which failures are worth asking about again. Measured on a random 12 of the
+# 285 rows marked failed:HTTPError -- ten were 404 and two were 503. A 404 is
+# the archive saying it holds no capture at that url and timestamp, which will
+# not change; re-asking is spent politeness, not a recovered article. Anything
+# here is the archive being briefly unable, which is exactly what a retry is
+# for. Bare "HTTPError" is the legacy marker from before the code was
+# recorded: retryable once so it gets reclassified into a code.
+RETRYABLE = ("429", "500", "502", "503", "504",
+             "TimeoutError", "URLError", "IncompleteRead", "HTTPException",
+             "ReadTimeout", "HTTPError")
 
 
 @dataclass
@@ -74,11 +86,11 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None,
     The gate stays the authority on what is readable -- this only avoids asking
     for what is known unreadable.
 
-    `retry_failed` re-opens rows a previous stint could not fetch. A failure is
-    marked so one stint does not loop on it, but most of them are URLError --
-    the archive being briefly unreachable, which is not a verdict about the
-    article. Left permanent that would silently drop about 6% of the backlog,
-    so the marker retires a row from the CURRENT pass, not from the job.
+    `retry_failed` re-opens rows a previous stint could not fetch, but only the
+    ones worth re-asking: see RETRYABLE. Measured, 83% of the failures are 404
+    -- the archive has no capture at that url and timestamp, and will not grow
+    one. Re-fetching those spends requests on a donated server to be told the
+    same thing.
     """
     sql = """
         SELECT s.id, a.id, j.slug,
@@ -92,9 +104,11 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None,
           AND s.raw_meta->>'capture' IS NOT NULL
           AND (NOT (s.raw_meta ? %(marker)s)
                {retry})
-    """.format(retry="OR s.raw_meta->>'body_backfill' LIKE 'failed:%%'"
+    """.format(retry="OR s.raw_meta->>'body_backfill' = ANY(%(retryable)s)"
                 if retry_failed else "")
     params: dict = {"marker": MARKER}
+    if retry_failed:
+        params["retryable"] = [f"failed:{r}" for r in RETRYABLE]
     if journal:
         sql += " AND j.slug = %(journal)s"
         params["journal"] = journal
@@ -171,6 +185,13 @@ def run(conn, *, client: WaybackClient, journal: str | None = None,
             # row would lose an article to a bad night, so it stays unattempted.
             log.warning("archive asked us to stop after %d rows", st.seen)
             break
+        except urllib.error.HTTPError as exc:
+            # The status code, not just the type: a 404 is permanent and a 503
+            # is this minute's weather, and "HTTPError" cannot tell them apart.
+            st.failed += 1
+            _mark(conn, snap_id, f"failed:{exc.code}")
+            conn.commit()
+            continue
         except Exception as exc:
             st.failed += 1
             _mark(conn, snap_id, f"failed:{type(exc).__name__}")

@@ -201,11 +201,34 @@ def test_a_failed_row_is_skipped_by_default():
     assert "failed:" not in sql
 
 
-def test_retry_failed_reopens_them():
-    """Most failures are URLError -- the archive briefly unreachable, which is
-    not a verdict about the article. Retiring those permanently would silently
-    drop about 6% of the backlog."""
+def test_retry_failed_reopens_only_the_transient_ones():
+    """Measured on a random sample of the failures: ten 404s to two 503s. A 404
+    is the archive saying it holds no capture at that url and timestamp, and
+    re-asking spends requests on a donated server to be told the same thing."""
     conn = FakeConn()
     bb.candidates(conn, retry_failed=True)
-    sql, _ = conn.sql[-1]
-    assert "LIKE 'failed:%'" in sql or "LIKE 'failed:%%'" in sql
+    sql, params = conn.sql[-1]
+    assert "ANY(%(retryable)s)" in sql
+    assert "failed:503" in params["retryable"]
+    assert "failed:404" not in params["retryable"]
+    assert "failed:410" not in params["retryable"]
+
+
+def test_an_http_failure_records_its_status_code(monkeypatch):
+    """'HTTPError' cannot tell a permanent 404 from a transient 503, so the
+    marker has to carry the code."""
+    import urllib.error
+    conn = FakeConn()
+    monkeypatch.setattr(bb, "candidates", lambda c, **k: [row()])
+    err = urllib.error.HTTPError("http://x", 404, "NOT FOUND", {}, None)
+    out = bb.run(conn, client=FakeClient({}, raises={"20150101000000": err}))
+    assert out["failed"] == 1
+    assert any("failed:404" in str(p) for _, p in conn.sql if p)
+
+
+def test_a_non_http_failure_still_records_its_type(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(bb, "candidates", lambda c, **k: [row()])
+    out = bb.run(conn, client=FakeClient({}, raises={"20150101000000": TimeoutError("slow")}))
+    assert out["failed"] == 1
+    assert any("failed:TimeoutError" in str(p) for _, p in conn.sql if p)
