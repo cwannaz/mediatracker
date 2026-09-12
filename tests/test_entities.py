@@ -1,5 +1,7 @@
 """Entity identity, and refusing to repair what the model got wrong."""
 import json
+import threading
+import time
 
 from mediatracker import entities as e
 
@@ -37,7 +39,9 @@ def test_an_empty_name_has_no_identity():
 class _Proc:
     def __init__(self, payload, rc=0):
         self.returncode = rc
-        self.stdout = json.dumps(payload) if isinstance(payload, dict) else payload
+        # A dict is the result envelope, printed as the stream's result line.
+        self.stdout = (json.dumps({"type": "result", **payload})
+                       if isinstance(payload, dict) else payload)
         self.stderr = ""
 
 
@@ -199,6 +203,127 @@ def test_a_clean_run_reports_itself_complete(monkeypatch):
         def commit(self): pass
     out = e.run(_Conn())
     assert out["complete"] is True and out["unanswered"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# the five-hour window
+# --------------------------------------------------------------------------- #
+
+def _stream(*events):
+    return "\n".join(json.dumps(ev) for ev in events)
+
+
+def _window(used, resets_at=1_789_255_800, status="allowed"):
+    return {"type": "rate_limit_event", "rate_limit_info": {
+        "status": status, "resetsAt": resets_at, "rateLimitType": "five_hour",
+        "unifiedWindows": {"five_hour": {"utilization": used, "resetsAt": resets_at},
+                           "seven_day": {"utilization": 0.9, "resetsAt": resets_at}}}}
+
+
+def test_the_window_reading_comes_from_the_stream(monkeypatch):
+    # Only stream-json carries the rate_limit_event; the json envelope says what
+    # a call cost and nothing about how full the window is.
+    reply = dict(_tool_reply([{"id": 1, "entities": [{"name": "Sion", "kind": "place"}]}]),
+                 type="result")
+    _fake_api(_stream({"type": "system", "subtype": "init", "tools": ["Bash"]},
+                      _window(0.42), reply), monkeypatch)
+    got = e.extract([{"title": "t", "body": "b"}])
+    assert got[1] == [{"name": "Sion", "kind": "place"}]
+    assert got["_quota"] == {"used": 0.42, "resets_at": 1_789_255_800}
+
+
+def test_the_seven_day_window_is_not_read_as_the_five_hour_one():
+    assert e._quota_of(_window(0.1)["rate_limit_info"])["used"] == 0.1
+
+
+def test_a_rejected_five_hour_window_reads_as_full():
+    assert e._quota_of(_window(0.97, status="rejected")["rate_limit_info"])["used"] == 1.0
+
+
+def test_a_full_window_is_not_retried(monkeypatch):
+    calls = {"n": 0}
+
+    def refused(*a, **k):
+        calls["n"] += 1
+        return _Proc(_stream(_window(1.0, status="rejected"),
+                             {"type": "result", "is_error": True, "total_cost_usd": 0}), 1)
+    monkeypatch.setattr(e.subprocess, "run", refused)
+    monkeypatch.setattr(e.time, "sleep", lambda s: None)
+    got = e.extract([{"title": "t", "body": "b"}], retries=3)
+    assert got["_failed"] is True and calls["n"] == 1
+
+
+def _run_fixture(monkeypatch, extract, n_docs):
+    recorded = []
+    monkeypatch.setattr(e, "available", lambda: (True, "test"))
+    monkeypatch.setattr(e, "extract", extract)
+    monkeypatch.setattr(e, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(e, "recount", lambda conn: None)
+    monkeypatch.setattr(e, "record",
+                        lambda conn, doc, ents: recorded.append(doc["ref"]) or 0)
+    monkeypatch.setattr(e, "pending", lambda conn, **kw: [
+        {"kind": "article", "ref": str(i), "journal": "lematin",
+         "published_at": None, "title": "t", "body": "b"} for i in range(n_docs)])
+
+    class _Conn:
+        def commit(self): pass
+    return _Conn(), recorded
+
+
+def test_the_run_pauses_at_the_ceiling_and_resumes_after_the_reset(monkeypatch):
+    """The window is shared with Cedric's own sessions, so the extractor takes
+    at most half of it -- and pauses rather than exits, so each new window is
+    used without anyone restarting the worker."""
+    lock = threading.Lock()
+    state = {"calls": 0, "slept": [], "calls_before_pause": None}
+    resets = time.time() + 3600
+
+    def extract(batch, **kw):
+        with lock:
+            state["calls"] += 1
+            n = state["calls"]
+        used = 0.1 if state["slept"] else (0.6 if n >= 3 else 0.2)
+        return {**{i: [] for i in range(1, len(batch) + 1)},
+                "_usage": {}, "_quota": {"used": used, "resets_at": resets}}
+
+    def sleep(s):
+        state["slept"].append(s)
+        state["calls_before_pause"] = state["calls"]
+    monkeypatch.setattr(e, "_sleep", sleep)
+    conn, recorded = _run_fixture(monkeypatch, extract, n_docs=500)   # 10 batches
+    out = e.run(conn, workers=2)
+
+    assert len(state["slept"]) == 1
+    assert 3500 < state["slept"][0] <= 3600 + e.RESET_GRACE_S
+    # The third call read 60%. What was already in the sliding window may land;
+    # nothing beyond it starts before the pause.
+    assert state["calls_before_pause"] <= 3 + 2 * 2
+    assert sorted(recorded, key=int) == [str(i) for i in range(500)], \
+        "every document recorded exactly once across the pause"
+    assert out["complete"] is True and out["paused"] == 1
+
+
+def test_a_full_window_pauses_instead_of_tripping_the_breaker(monkeypatch):
+    # Anyone on the account can fill the window. Those refusals are not failures
+    # of the batch: a dozen of them used to end the run until someone restarted it.
+    state = {"slept": 0}
+    resets = time.time() + 600
+    n_docs = 50 * (e.GIVE_UP_AFTER + 5)
+
+    def extract(batch, **kw):
+        if not state["slept"]:
+            return {"_usage": {}, "_failed": True,
+                    "_quota": {"used": 1.0, "resets_at": resets}}
+        return {i: [] for i in range(1, len(batch) + 1)}
+
+    def sleep(s):
+        state["slept"] += 1
+    monkeypatch.setattr(e, "_sleep", sleep)
+    conn, recorded = _run_fixture(monkeypatch, extract, n_docs=n_docs)
+    out = e.run(conn, workers=4)
+    assert "stopped" not in out
+    assert out["complete"] is True and out["unanswered"] == 0
+    assert sorted(recorded, key=int) == [str(i) for i in range(n_docs)]
 
 
 # --------------------------------------------------------------------------- #

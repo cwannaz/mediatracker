@@ -106,6 +106,18 @@ CALL_TIMEOUT = 900.0
 # Consecutive failed calls before a run gives up. A handful is bad luck;
 # a dozen is a condition the next call will not improve.
 GIVE_UP_AFTER = 12
+# The share of the five-hour subscription window this worker may take before it
+# pauses. The window is shared with Cedric's own sessions on the same account,
+# so the extractor uses at most half of each one and waits out the reset.
+# Read from the CLI's own rate_limit_event, not estimated from spend. Calls
+# already running when the ceiling is seen still land, so a pause begins a
+# point or two above it.
+QUOTA_CEILING = 0.50
+# Called again this long after the reported reset: the reset is given to the
+# minute, and a call made a few seconds early would read the old window.
+RESET_GRACE_S = 120
+# Over the ceiling but given no reset time: wait this long and look again.
+QUOTA_RECHECK_S = 900
 
 SYSTEM = """You extract named entities from Swiss French-language news articles.
 
@@ -333,6 +345,7 @@ def extract(batch: list[dict], *, model: str = MODEL,
     """
     prompt = _prompt_for(batch)
     delay = 5.0
+    quota = None
     for attempt in range(retries):
         try:
             p = subprocess.run(
@@ -342,35 +355,86 @@ def extract(batch: list[dict], *, model: str = MODEL,
                  # tree is inside the fleet backup, so each one was copied to
                  # the NAS and to the offline drive on every run.
                  "--no-session-persistence",
-                 "--output-format", "json", "--json-schema", json.dumps(SCHEMA),
+                 # stream-json, not json: only the stream carries the
+                 # rate_limit_event that says how full the five-hour window
+                 # is. Under -p it requires --verbose.
+                 "--output-format", "stream-json", "--verbose",
+                 "--json-schema", json.dumps(SCHEMA),
                  prompt],
                 capture_output=True, text=True, timeout=timeout,
                 env=claude_env(), stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             log.warning("call timed out after %.0fs (attempt %d)", timeout, attempt + 1)
             p = None
+        env = None
+        if p is not None:
+            env, seen = _parse_stream(p.stdout)
+            quota = seen or quota
         if p is not None and p.returncode == 0:
-            try:
-                env = json.loads(p.stdout)
-            except json.JSONDecodeError:
-                log.warning("unparseable envelope: %.200s", p.stdout)
-                env = None
             if env is not None and not env.get("is_error"):
-                return _read(env, batch)
-            if env is not None:
-                log.warning("run reported an error: %.200s",
-                            env.get("result") or env.get("api_error_status") or "")
+                got = _read(env, batch)
+                got["_quota"] = quota
+                return got
+            log.warning("run reported an error: %.200s",
+                        (env or {}).get("result") or (env or {}).get("api_error_status")
+                        or (p.stdout or "").strip()[-200:])
         elif p is not None:
-            # stdout, not just stderr: the CLI reports a refusal, a usage limit
-            # or an auth problem on stdout and leaves stderr empty, and logging
-            # only stderr threw away the diagnosis for 8,063 failures.
-            log.warning("claude exited %s: out=%.300s err=%.200s",
-                        p.returncode, (p.stdout or "").strip(),
+            # The result line, not just stderr: the CLI reports a refusal, a
+            # usage limit or an auth problem there and leaves stderr empty, and
+            # logging only stderr threw away the diagnosis for 8,063 failures.
+            # Not the raw stdout either -- the stream opens with an init banner
+            # that would fill any truncated excerpt.
+            log.warning("claude exited %s: result=%.300s err=%.200s",
+                        p.returncode,
+                        json.dumps(env) if env else (p.stdout or "").strip()[-300:],
                         (p.stderr or "").strip())
+        if quota and quota["used"] >= 1.0:
+            # The window is full: a retry spends the retries and the wait.
+            break
         if attempt < retries - 1:
             time.sleep(delay)
             delay *= 2
-    return {"_usage": {}, "_failed": True}
+    return {"_usage": {}, "_failed": True, "_quota": quota}
+
+
+def _parse_stream(text: str) -> tuple[dict | None, dict | None]:
+    """The result envelope of one call, and its latest five-hour reading.
+
+    The result line is the same envelope `--output-format json` used to print.
+    """
+    env = quota = None
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") == "result":
+            env = d
+        elif d.get("type") == "rate_limit_event":
+            quota = _quota_of(d.get("rate_limit_info") or {}) or quota
+    return env, quota
+
+
+def _quota_of(info: dict) -> dict | None:
+    """Five-hour utilization (0-1) and reset time, from a rate_limit_event.
+
+    The event also carries the seven-day window; only the five-hour one is
+    read. A refusal on the five-hour window reads as full whatever the
+    utilization figure says.
+    """
+    window = (info.get("unifiedWindows") or {}).get("five_hour") or {}
+    used = window.get("utilization")
+    resets = window.get("resetsAt")
+    if info.get("rateLimitType") == "five_hour":
+        resets = resets or info.get("resetsAt")
+        if info.get("status") == "rejected":
+            used = 1.0
+    if not isinstance(used, (int, float)):
+        return None
+    return {"used": float(used), "resets_at": resets}
 
 
 def _read(env: dict, batch: list[dict]) -> dict:
@@ -514,9 +578,27 @@ def estimate(conn, *, kind: str = "article", with_body_only: bool = False) -> di
                     f"{BODY_CHARS} chars; rates measured on 100 real articles"}
 
 
+_sleep = time.sleep     # a seam: a test must not wait out a five-hour window
+
+
+def _wait_for_window(quota: dict, ceiling: float) -> float:
+    """Sleep until the five-hour window resets. Returns the seconds waited."""
+    now = time.time()
+    resets = quota.get("resets_at")
+    if isinstance(resets, (int, float)) and resets > now:
+        wait = resets - now + RESET_GRACE_S
+    else:
+        wait = QUOTA_RECHECK_S
+    log.warning("five-hour window at %.0f%% (ceiling %.0f%%): pausing %.0f min, until %s",
+                100 * quota["used"], 100 * ceiling, wait / 60,
+                time.strftime("%H:%M", time.localtime(now + wait)))
+    _sleep(wait)
+    return wait
+
+
 def run(conn, *, kind: str = "article", limit: int | None = None,
         with_body_only: bool = False, workers: int = 1, model: str = MODEL,
-        progress=None) -> dict:
+        progress=None, quota_ceiling: float = QUOTA_CEILING) -> dict:
     """Read pending documents and store what comes back. Resumable throughout.
 
     Calls run in a thread pool -- each is a separate `claude` process, so the
@@ -542,67 +624,111 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
     started = time.time()
 
     workers = max(1, workers)
+    todo = deque(batches)
+    quota = None            # latest five-hour reading: {"used": 0-1, "resets_at"}
+    band = -1               # last 10% step logged, so the journal shows the climb
+    paused = 0
+    paused_s = 0.0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # A sliding window, NOT `pool.map`. `map` submits every task at once,
         # so giving up would stop the recording while the calls kept going --
         # exactly the thing worth avoiding when the reason for failing is a
         # usage limit. Only a few calls are ever in flight beyond the one being
         # consumed, and abandoning the window abandons the work.
-        queue = iter(batches)
         inflight: deque = deque()
 
         def fill() -> None:
-            while len(inflight) < workers * 2:
-                try:
-                    b = next(queue)
-                except StopIteration:
-                    return
+            while len(inflight) < workers * 2 and todo:
+                b = todo.popleft()
                 inflight.append((b, pool.submit(extract, b, model=model)))
 
+        def over() -> bool:
+            return quota is not None and quota["used"] >= quota_ceiling
+
         fill()
-        while inflight:
+        while inflight or todo:
+            if not inflight:
+                # Work is left and nothing is running: the window reached the
+                # ceiling and every call already started has landed. Wait out
+                # the reset rather than exit, so each new window is used
+                # without anyone restarting the worker.
+                if over():
+                    paused += 1
+                    paused_s += _wait_for_window(quota, quota_ceiling)
+                    quota, band = None, -1
+                fill()
+                continue
             batch, fut = inflight.popleft()
             got = fut.result()
             usage = got.pop("_usage", {}) or {}
             usd += usage.get("usd", 0.0) or 0.0
+            reading = got.pop("_quota", None)
+            if reading:
+                quota = reading
+                if int(reading["used"] * 10) > band:
+                    band = int(reading["used"] * 10)
+                    log.info("five-hour window at %.0f%%", 100 * reading["used"])
             if got.pop("_failed", False):
-                failed += len(batch)
-                consecutive += 1
-                # Stop, rather than grind. A sustained failure is a usage
-                # limit, an outage or a broken login -- none of which the next
-                # call will fix, and all of which a later run will. The first
-                # version ran on through 2,683 consecutive failures and
-                # "finished" with 134,150 documents unread, which reads like a
-                # completed run and is not one. Nothing is marked read unless
-                # it came back, so stopping loses nothing.
-                if consecutive >= GIVE_UP_AFTER:
-                    stopped = (f"{consecutive} calls in a row failed; stopping. "
-                               f"Nothing was marked read, so re-running resumes "
-                               f"where this left off.")
-                    log.error(stopped)
-                    for _, pendingfut in inflight:
-                        pendingfut.cancel()
-                    inflight.clear()
-                    break
+                if over():
+                    # Refused because the window is full -- by this worker or
+                    # by anyone else on the account. Not a failure of the
+                    # batch: it goes back in the queue and runs after the reset.
+                    todo.appendleft(batch)
+                else:
+                    failed += len(batch)
+                    consecutive += 1
+                    # Stop, rather than grind. A sustained failure is an
+                    # outage, a broken login or a limit the stream did not
+                    # report -- none of which the next call will fix. The first
+                    # version ran on through 2,683 consecutive failures and
+                    # "finished" with 134,150 documents unread, which reads like
+                    # a completed run and is not one. Nothing is marked read
+                    # unless it came back, so stopping loses nothing.
+                    if consecutive >= GIVE_UP_AFTER:
+                        stopped = (f"{consecutive} calls in a row failed; stopping. "
+                                   f"Nothing was marked read, so re-running resumes "
+                                   f"where this left off.")
+                        log.error(stopped)
+                        for _, pendingfut in inflight:
+                            pendingfut.cancel()
+                        inflight.clear()
+                        break
+            else:
+                consecutive = 0
+                for pos, doc in enumerate(batch, 1):
+                    if pos not in got:
+                        # Not answered for: leave it unread so a later run retries.
+                        failed += 1
+                        continue
+                    ents += record(conn, doc, got[pos])
+                    done += 1
+                conn.commit()               # commit per call: the unit we paid for
+                if progress:
+                    progress(done, len(docs), ents, usd, failed)
+            if over():
+                # At the ceiling: start nothing new. Calls not yet begun are
+                # withdrawn and requeued; calls already running are paid for,
+                # so they land and are recorded before the pause.
+                running: deque = deque()
+                withdrawn = []
+                for b, f in inflight:
+                    if f.cancel():
+                        withdrawn.append(b)
+                    else:
+                        running.append((b, f))
+                inflight.clear()
+                inflight.extend(running)
+                todo.extendleft(reversed(withdrawn))
+            else:
                 fill()
-                continue
-            consecutive = 0
-            for pos, doc in enumerate(batch, 1):
-                if pos not in got:
-                    # Not answered for: leave it unread so a later run retries.
-                    failed += 1
-                    continue
-                ents += record(conn, doc, got[pos])
-                done += 1
-            conn.commit()               # commit per call: the unit we paid for
-            if progress:
-                progress(done, len(docs), ents, usd, failed)
-            fill()
 
     recount(conn)
     out = {"documents": done, "mentions": ents, "unanswered": failed,
            "usd": round(usd, 2), "seconds": round(time.time() - started, 1),
            "complete": stopped is None and failed == 0}
+    if paused:
+        out["paused"] = paused
+        out["paused_hours"] = round(paused_s / 3600, 2)
     if stopped:
         out["stopped"] = stopped
     return out
@@ -683,6 +809,8 @@ def main(argv=None) -> int:
             s.add_argument("--limit", type=int, default=None)
             s.add_argument("--workers", type=int, default=1)
             s.add_argument("--model", default=MODEL)
+            s.add_argument("--quota-ceiling", type=float, default=QUOTA_CEILING,
+                           help="pause when the five-hour window is this full (0-1)")
     t = sub.add_parser("top")
     t.add_argument("--kind", default=None, choices=list(KINDS))
     t.add_argument("--limit", type=int, default=30)
@@ -709,6 +837,7 @@ def main(argv=None) -> int:
             print(json.dumps(run(conn, kind=a.kind, limit=a.limit,
                                  with_body_only=a.with_body_only,
                                  workers=a.workers, model=a.model,
+                                 quota_ceiling=a.quota_ceiling,
                                  progress=show), indent=1))
         except NotLoggedIn as exc:
             print(f"cannot run: {exc}")
