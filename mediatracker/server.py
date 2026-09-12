@@ -209,18 +209,27 @@ class Server:
     # ------------------------------------------------------------------ #
 
     async def _handle(self, ws) -> None:
-        async for raw in ws:
-            try:
-                msg = parse_request(raw)
-            except ProtocolError as exc:
-                await ws.send(error("?", str(exc)))
-                continue
-            cmd = msg["cmd"]
-            try:
-                await self._dispatch(ws, cmd, msg)
-            except Exception as exc:
-                log.exception("command %s failed: %s", cmd, exc)
-                await ws.send(error(cmd, str(exc)))
+        try:
+            async for raw in ws:
+                try:
+                    msg = parse_request(raw)
+                except ProtocolError as exc:
+                    await ws.send(error("?", str(exc)))
+                    continue
+                cmd = msg["cmd"]
+                try:
+                    await self._dispatch(ws, cmd, msg)
+                except Exception as exc:
+                    log.exception("command %s failed: %s", cmd, exc)
+                    await ws.send(error(cmd, str(exc)))
+        finally:
+            # The page shows "daemon offline" from its socket alone, and nothing
+            # here recorded when or why a socket closed -- so a report of it
+            # could not be traced from this side. The code says who ended it:
+            # 1001 the page going away, 1011 a keepalive answered too late.
+            log.info("connection closed: %s code=%s reason=%r",
+                     getattr(ws, "remote_address", None),
+                     getattr(ws, "close_code", None), getattr(ws, "close_reason", None))
 
     async def _dispatch(self, ws, cmd: str, msg: dict) -> None:
         if cmd == "ping":

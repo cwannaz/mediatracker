@@ -21,6 +21,12 @@ export function useDaemon(url = DEFAULT_URL) {
       ws.onopen = () => setConnected(true)
       ws.onclose = () => {
         setConnected(false)
+        // Requests still waiting will never be answered on this socket. Settle
+        // them now: left in the FIFO, the first replies on the NEXT socket would
+        // be handed to them, and every view would read the reply meant for the
+        // request before it until the page was reloaded.
+        const orphans = pending.current.splice(0)
+        for (const resolve of orphans) resolve({ ok: false, error: 'connection to the daemon was lost' })
         if (!closed) retry = setTimeout(connect, 2000)
       }
       ws.onmessage = (ev) => {
