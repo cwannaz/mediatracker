@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ReferenceCard } from './Reference.jsx'
 
 // The inferred half of a subject's profile: gender, language mastery, politics
@@ -10,28 +10,91 @@ import { ReferenceCard } from './Reference.jsx'
 const LEANINGS = ['far-left', 'left', 'centre-left', 'centre',
                   'centre-right', 'right', 'far-right']
 
+const COMMUNITIES = { lematin: 'Le Matin', 'tx-romandie': '24 heures / Tribune de Genève' }
+const MIN_COMMENTS = 5
+const POLL_MS = 5000
+
 export default function ProfilePanel({ nick, personaId, send }) {
   const [state, setState] = useState({ loading: true, profile: null })
+  // One analysable subject per comment community: a nickname on Le Matin and
+  // the same nickname on 24 heures are two subjects with two profiles.
+  const [subjects, setSubjects] = useState([])
+  const [community, setCommunity] = useState(null)
+  const [reload, setReload] = useState(0)
+
+  const loadSubjects = useCallback(() => {
+    const args = personaId != null ? { persona_id: personaId } : { nick }
+    return send('profile_subjects', args).then((r) => (r.ok ? r.subjects : []))
+  }, [nick, personaId, send])
+
+  useEffect(() => {
+    let live = true
+    loadSubjects().then((subs) => {
+      if (!live) return
+      setSubjects(subs)
+      setCommunity((cur) => {
+        if (cur && subs.some((s) => s.community === cur)) return cur
+        return (subs.find((s) => s.profiled_at) || subs[0] || {}).community || null
+      })
+    }).catch(() => { if (live) setSubjects([]) })
+    return () => { live = false }
+  }, [loadSubjects, reload])
 
   useEffect(() => {
     let live = true
     const args = personaId != null ? { persona_id: personaId } : { nick }
+    if (community) args.community = community
     send('get_profile', args)
       .then((r) => { if (live) setState({ loading: false, profile: r.ok ? r.profile : null }) })
       .catch(() => { if (live) setState({ loading: false, profile: null }) })
     return () => { live = false }
-  }, [nick, personaId, send])
+  }, [nick, personaId, community, reload, send])
 
-  if (state.loading) return <div className="card"><h2>Profile</h2><div className="empty">Loading…</div></div>
+  const subject = subjects.find((s) => s.community === community) || null
+  const running = subject?.job?.state === 'running'
+
+  // The run takes minutes and lives in the daemon, so the page asks after it
+  // rather than waiting on one long reply; leaving and coming back picks the
+  // same run up again.
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => {
+      send('profile_job', { community: subject.community, kind: subject.kind, key: subject.key })
+        .then((r) => {
+          if (!r.ok) return
+          setSubjects((subs) => subs.map((s) => (s.community === r.community ? { ...s, job: r.job } : s)))
+          if (r.job && r.job.state !== 'running') setReload((n) => n + 1)
+        })
+        .catch(() => {})
+    }, POLL_MS)
+    return () => clearInterval(t)
+  }, [running, subject?.community, subject?.kind, subject?.key, send])
+
+  const run = () => {
+    if (!subject) return
+    send('build_profile', { community: subject.community, kind: subject.kind, key: subject.key })
+      .then((r) => {
+        if (r.ok) setSubjects((subs) => subs.map((s) => (s.community === r.community ? { ...s, job: r.job } : s)))
+      })
+      .catch(() => {})
+  }
+
+  const bar = <AnalysisBar subjects={subjects} community={community}
+    setCommunity={setCommunity} subject={subject} onRun={run} />
+
+  if (state.loading) return <>{bar}<div className="card"><h2>Profile</h2><div className="empty">Loading…</div></div></>
   if (!state.profile) {
     return (
-      <div className="card">
-        <h2>Profile</h2>
-        <p className="subtle">
-          No profile for this subject yet. Profiles are built by the analysis pass
-          over subjects with at least 5 comments.
-        </p>
-      </div>
+      <>
+        {bar}
+        <div className="card">
+          <h2>Profile</h2>
+          <p className="subtle">
+            No profile for this subject yet. Profiles are built by the analysis pass
+            over subjects with at least 5 comments.
+          </p>
+        </div>
+      </>
     )
   }
 
@@ -47,6 +110,7 @@ export default function ProfilePanel({ nick, personaId, send }) {
 
   return (
     <>
+      {bar}
       <div className="card">
         <h2>Profile — inferred</h2>
         <div className="metrics">
@@ -218,6 +282,63 @@ function Gender({ g }) {
   }
   const [label, v] = male >= female ? ['male', male] : ['female', female]
   return <>{label} <span className="subtle">{Math.round(v * 100)}%</span></>
+}
+
+const fmtDate = (iso) => new Date(iso).toLocaleDateString()
+const fmtTime = (secs) => new Date(secs * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+// Which community's subject is shown, and the analysis pass for that one
+// subject, run now rather than at the next batch.
+function AnalysisBar({ subjects, community, setCommunity, subject, onRun }) {
+  if (!subjects.length) return null
+  const job = subject?.job
+  const running = job?.state === 'running'
+  const enough = subject && subject.n_comments >= MIN_COMMENTS
+  const where = subject ? (COMMUNITIES[subject.community] || subject.community) : ''
+  return (
+    <div className="card">
+      <h2>Analysis pass</h2>
+      {subjects.length > 1 && (
+        <div className="row" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+          {subjects.map((s) => (
+            <button key={s.community} className={'chip' + (s.community === community ? ' on' : '')}
+              onClick={() => setCommunity(s.community)}>
+              {COMMUNITIES[s.community] || s.community} · {s.n_comments} comments
+            </button>
+          ))}
+        </div>
+      )}
+      {subject && (
+        <p className="subtle">
+          {subject.kind === 'persona' ? subject.label : `«${subject.label}»`} on {where}:{' '}
+          {subject.n_comments} comments.{' '}
+          {subject.profiled_at
+            ? `Profiled ${fmtDate(subject.profiled_at)} from ${subject.profiled_comments} comments.`
+            : 'Not profiled yet.'}
+        </p>
+      )}
+      <div className="row" style={{ flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 10 }}>
+        <button className="btn" disabled={!enough || running} onClick={onRun}
+          title={subject?.profiled_at ? 'Replaces the stored profile for this community' : undefined}>
+          {running ? 'Analysing…' : subject?.profiled_at ? 'Re-run analysis' : 'Run analysis'}
+        </button>
+        {running && (
+          <span className="subtle">
+            Started {fmtTime(job.started_at)}. Reading the whole history takes a few
+            minutes; you can leave this page.
+          </span>
+        )}
+        {!running && job?.state === 'failed' && <span className="subtle">Failed: {job.error}</span>}
+        {!running && job?.state === 'done' && (
+          <span className="subtle">
+            Done{job.result?.corrections?.length
+              ? ` — ${job.result.corrections.length} correction(s) applied on ingest` : ''}.
+          </span>
+        )}
+        {subject && !enough && <span className="subtle">Needs at least {MIN_COMMENTS} comments.</span>}
+      </div>
+    </div>
+  )
 }
 
 // Position on the left–right axis, drawn only when the pass committed to one.

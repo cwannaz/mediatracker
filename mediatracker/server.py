@@ -13,12 +13,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import time
 from functools import partial
 
 import websockets
 
 from . import (alias_candidates, anagrams, api, blobserver, coverage, db, disclosures,
-               entities, handles, search, stance, thumbs,
+               entities, handles, profiling, search, stance, thumbs,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
@@ -57,6 +58,12 @@ class Server:
         # already happened once in this project, from a profile query.
         self.search_conn = None
         self.engine: ScanEngine | None = None
+        # Single-subject profile runs started from the page, by subject. One
+        # takes minutes, so a request only starts it and the page polls
+        # `profile_job`: the web app pairs replies with requests in order, and
+        # a reply held back for minutes would stall every request behind it.
+        self.profile_jobs: dict[tuple[str, str, str], dict] = {}
+        self._job_tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -246,6 +253,15 @@ class Server:
                 await ws.send(self._browse(cmd, msg))
             except db.BadPattern as exc:
                 await ws.send(error(cmd, f"invalid search pattern: {exc}", bad_pattern=True))
+
+        elif cmd in ("profile_subjects", "build_profile", "profile_job"):
+            if self.conn is None:
+                await ws.send(error(cmd, "degraded: Postgres unavailable"))
+                return
+            try:
+                await ws.send(self._profile_run(cmd, msg))
+            except (KeyError, ValueError) as exc:
+                await ws.send(error(cmd, f"bad request: {exc}"))
 
         elif cmd == "scan_history":
             if self.conn is None:
@@ -477,6 +493,58 @@ class Server:
         if pid is not None:
             return "persona", str(pid)
         return "nick", str(msg["nick"])
+
+    def _profile_run(self, cmd: str, msg: dict) -> str:
+        """List a page's analysable subjects, start a run, or report on one."""
+        if cmd == "profile_subjects":
+            pid = msg.get("persona_id")
+            opts = profiling.subject_options(
+                self.conn, nick=msg.get("nick"),
+                persona_id=int(pid) if pid is not None else None)
+            for o in opts:
+                o["job"] = self.profile_jobs.get((o["community"], o["kind"], o["key"]))
+            return ok(cmd, subjects=opts)
+        subject = (str(msg["community"]), str(msg["kind"]), str(msg["key"]))
+        if subject[1] not in ("nick", "persona"):
+            raise ValueError(f"kind must be nick or persona, not {subject[1]!r}")
+        job = self.profile_jobs.get(subject)
+        # A second click while a run is going reports that run: one subject,
+        # one call, however many times the button is pressed.
+        if cmd == "build_profile" and (job is None or job["state"] != "running"):
+            job = {"state": "running", "started_at": time.time()}
+            self.profile_jobs[subject] = job
+            task = asyncio.create_task(self._profile_job(subject, job))
+            self._job_tasks.add(task)
+            task.add_done_callback(self._job_tasks.discard)
+        return ok(cmd, community=subject[0], kind=subject[1], key=subject[2], job=job)
+
+    async def _profile_job(self, subject: tuple[str, str, str], job: dict) -> None:
+        """One subject's analysis, off the event loop and on its own connection.
+
+        Its own connection for the index keeper's reason: psycopg connections
+        are not shared between threads, and self.conn is answering the page.
+        """
+        community, kind, key = subject
+        conn = None
+        try:
+            conn = await asyncio.to_thread(db.connect, self.cfg)
+            if conn is None:
+                raise RuntimeError("no database connection")
+            result = await asyncio.to_thread(
+                partial(profiling.analyse_subject, conn,
+                        community=community, kind=kind, key=key))
+            job.update(state="done", result=result)
+            log.info("profile built for %s/%s/%s: %s", community, kind, key, result)
+        except Exception as exc:
+            job.update(state="failed", error=str(exc)[:500])
+            log.warning("profile run failed for %s/%s/%s: %s", community, kind, key, exc)
+        finally:
+            job["finished_at"] = time.time()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _notes(self, cmd: str, msg: dict) -> str:
         """Hand-written notes on a subject.
