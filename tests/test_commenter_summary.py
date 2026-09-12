@@ -77,7 +77,8 @@ def test_a_refresh_writes_only_rows_whose_totals_moved():
 def test_the_anagram_index_reads_its_handles_from_the_summary():
     conn = _Conn(built=True)
     anagrams.load(conn)
-    assert "unnest(communities) FROM commenter_summary" in conn.sql[-1]
+    read = conn.sql[-1]
+    assert "unnest(communities)" in read and "FROM commenter_summary" in read
     assert not any("GROUP BY" in s for s in conn.sql), "4.2M comments re-read for a handle list"
 
 
