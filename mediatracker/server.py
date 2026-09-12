@@ -39,9 +39,17 @@ INDEX_MAX_BATCHES = 12
 
 
 
-def _rebuild_browser_caches(conn) -> tuple[dict, dict]:
-    """One summary-keeper pass, run in a worker thread."""
-    return db.refresh_commenter_summary(conn), anagrams.load(conn)
+def _rebuild_browser_caches(conn, known: str | None) -> tuple[dict, str | None, dict | None]:
+    """One summary-keeper pass, run in a worker thread.
+
+    The anagram index is rebuilt only when the set of handles moved -- a new
+    nickname, one gone, or one writing in another community. Totals changing
+    leave it exactly as it was, and rebuilding it anyway cost ~3 s of CPU in the
+    daemon's own process every quarter hour. Returns index None when unchanged.
+    """
+    done = db.refresh_commenter_summary(conn)
+    sig = db.commenter_handles_signature(conn)
+    return done, sig, (anagrams.load(conn) if sig != known else None)
 
 
 class Server:
@@ -72,6 +80,7 @@ class Server:
         # The anagram index over every nickname, kept by the summary keeper:
         # loading it took 3 s, and it used to be loaded for every page.
         self.anagram_index: dict | None = None
+        self._anagram_sig: str | None = None     # the handle set it was built from
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -171,8 +180,11 @@ class Server:
                 if conn is None:
                     conn = await asyncio.to_thread(db.connect, self.cfg)
                 if conn is not None:
-                    done, index = await asyncio.to_thread(_rebuild_browser_caches, conn)
-                    self.anagram_index = index
+                    done, sig, index = await asyncio.to_thread(
+                        _rebuild_browser_caches, conn, self._anagram_sig)
+                    if index is not None:
+                        self.anagram_index, self._anagram_sig = index, sig
+                        log.info("anagram index rebuilt: %s handles matched", f"{len(index):,}")
                     if done["changed"] or done["removed"]:
                         log.info("commenter summary: %s changed, %s removed",
                                  f"{done['changed']:,}", f"{done['removed']:,}")
@@ -679,8 +691,12 @@ class Server:
         if cmd == "list_personas":
             rows = db.list_personas(self.conn)
             # A person is flagged when ANY of their handles is, since the whole
-            # point of the grouping is that the handles are one writer.
-            index = anagrams.load(self.conn)
+            # point of the grouping is that the handles are one writer. The
+            # keeper's index, as for the commenter list: loading it here cost
+            # ~3 s on the event loop every time the tab was opened.
+            if self.anagram_index is None:
+                self.anagram_index = anagrams.load(self.conn)
+            index = self.anagram_index
             for r in rows:
                 hits = [index[a] | {"handle": a}
                         for a in (r.get("aliases") or []) if a in index]

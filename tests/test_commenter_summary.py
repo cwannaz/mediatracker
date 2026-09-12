@@ -70,7 +70,32 @@ def test_a_refresh_writes_only_rows_whose_totals_moved():
     db.refresh_commenter_summary(conn)
     upsert = conn.sql[0]
     assert "ON CONFLICT (nick) DO UPDATE" in upsert and "IS DISTINCT FROM" in upsert
+    assert "s.communities" in upsert, "a nickname moving community must reach the summary"
     assert any("DELETE FROM commenter_summary" in s for s in conn.sql)
+
+
+def test_the_anagram_index_reads_its_handles_from_the_summary():
+    conn = _Conn(built=True)
+    anagrams.load(conn)
+    assert "unnest(communities) FROM commenter_summary" in conn.sql[-1]
+    assert not any("GROUP BY" in s for s in conn.sql), "4.2M comments re-read for a handle list"
+
+
+@pytest.mark.parametrize("built, min_comments", [(False, 1), (True, 3)])
+def test_the_live_read_remains_where_the_summary_cannot_answer(built, min_comments):
+    # Not built yet, or a per-community threshold the summary keeps no counts for.
+    conn = _Conn(built=built)
+    anagrams.load(conn, min_comments=min_comments)
+    assert "GROUP BY 1, 2" in conn.sql[-1]
+
+
+@pytest.mark.parametrize("built", [True, False])
+def test_the_handles_are_read_in_a_fixed_order(built):
+    # `find` keeps one handle per letter sequence, so an unordered read made
+    # 'À venir' and 'A. Venir' swap places from one build to the next.
+    conn = _Conn(built=built)
+    anagrams.load(conn)
+    assert "ORDER BY 1, 2" in conn.sql[-1]
 
 
 # --------------------------------------------------------------------------- #
@@ -79,7 +104,7 @@ def test_a_refresh_writes_only_rows_whose_totals_moved():
 
 def _run_keeper(monkeypatch, rebuild, ticks):
     s = server.Server.__new__(server.Server)
-    s.cfg, s.anagram_index = object(), None
+    s.cfg, s.anagram_index, s._anagram_sig = object(), None, None
     monkeypatch.setattr(server.db, "connect", lambda cfg: object())
     monkeypatch.setattr(server, "_rebuild_browser_caches", rebuild)
     seen = 0
@@ -103,9 +128,9 @@ def _run_keeper(monkeypatch, rebuild, ticks):
 def test_the_keeper_builds_at_start_not_a_quarter_hour_later(monkeypatch):
     calls = []
 
-    def rebuild(conn):
+    def rebuild(conn, known):
         calls.append(conn)
-        return {"changed": 1, "removed": 0}, {"abc": {}}
+        return {"changed": 1, "removed": 0}, "sig1", {"abc": {}}
     s = _run_keeper(monkeypatch, rebuild, ticks=1)
     assert len(calls) == 1, "the first pass must come before the first sleep"
     assert s.anagram_index == {"abc": {}}
@@ -113,7 +138,8 @@ def test_the_keeper_builds_at_start_not_a_quarter_hour_later(monkeypatch):
 
 def test_the_keeper_refreshes_on_every_tick(monkeypatch):
     calls = []
-    _run_keeper(monkeypatch, lambda conn: calls.append(1) or ({"changed": 0, "removed": 0}, {}),
+    _run_keeper(monkeypatch,
+                lambda conn, known: calls.append(1) or ({"changed": 0, "removed": 0}, "s", {}),
                 ticks=3)
     assert len(calls) == 3
 
@@ -121,12 +147,35 @@ def test_the_keeper_refreshes_on_every_tick(monkeypatch):
 def test_a_failing_refresh_does_not_stop_the_keeper(monkeypatch):
     n = 0
 
-    def boom(conn):
+    def boom(conn, known):
         nonlocal n
         n += 1
         raise RuntimeError("summary on fire")
     _run_keeper(monkeypatch, boom, ticks=3)
     assert n == 3
+
+
+def test_the_index_is_kept_while_the_handles_are_unchanged(monkeypatch):
+    seen = []
+
+    def rebuild(conn, known):
+        seen.append(known)
+        index = {"built": {}} if known != "sig1" else None
+        return {"changed": 40, "removed": 0}, "sig1", index
+    s = _run_keeper(monkeypatch, rebuild, ticks=3)
+    assert seen == [None, "sig1", "sig1"], "each pass must be told what the index was built from"
+    assert s.anagram_index == {"built": {}}, "an unchanged pass must not drop the index"
+
+
+def test_a_pass_loads_the_index_only_when_the_handle_set_moved(monkeypatch):
+    loads = []
+    monkeypatch.setattr(server.db, "refresh_commenter_summary",
+                        lambda conn: {"changed": 5, "removed": 0})
+    monkeypatch.setattr(server.db, "commenter_handles_signature", lambda conn: "now")
+    monkeypatch.setattr(server.anagrams, "load", lambda conn: loads.append(1) or {"x": {}})
+    assert server._rebuild_browser_caches(object(), "now")[2] is None
+    assert server._rebuild_browser_caches(object(), "before")[2] == {"x": {}}
+    assert loads == [1], "totals moving is not a reason to rebuild the index"
 
 
 # --------------------------------------------------------------------------- #

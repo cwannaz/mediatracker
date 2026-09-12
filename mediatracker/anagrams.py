@@ -217,16 +217,36 @@ def load(conn, *, min_comments: int = 1) -> dict[str, dict]:
     Deliberately over the whole corpus rather than over one page of results: a
     handle's partner is usually not on the same screen, and a page-local index
     would report a handle as unmatched purely because of pagination.
+
+    The handles come from `commenter_summary`, which already records each
+    nickname's communities; re-reading 4.2M comments for them was a second of
+    the three this took. Read live only where the summary cannot answer: before
+    its communities are filled in, or for a `min_comments` above one, since it
+    keeps no per-community counts.
     """
+    # Ordered, both ways. `find` keeps one handle per letter sequence for the
+    # reversal sweep, so two respellings with the same letters ('À venir',
+    # 'A. Venir') resolve to whichever arrived last -- and an unordered read
+    # flipped that choice from one build to the next.
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT c.author_nick AS nick, j.community, count(*) AS n
-            FROM comment c
-            JOIN article a ON a.id = c.article_id
-            JOIN journal j ON j.id = a.journal_id
-            WHERE c.author_nick IS NOT NULL
-            GROUP BY 1, 2
-            HAVING count(*) >= %s
-        """, (min_comments,))
+        from_summary = False
+        if min_comments <= 1:
+            cur.execute("SELECT EXISTS (SELECT 1 FROM commenter_summary "
+                        "WHERE communities <> '{}')")
+            from_summary = cur.fetchone()[0]
+        if from_summary:
+            cur.execute("SELECT nick, unnest(communities) AS community "
+                        "FROM commenter_summary ORDER BY 1, 2")
+        else:
+            cur.execute("""
+                SELECT c.author_nick AS nick, j.community, count(*) AS n
+                FROM comment c
+                JOIN article a ON a.id = c.article_id
+                JOIN journal j ON j.id = a.journal_id
+                WHERE c.author_nick IS NOT NULL
+                GROUP BY 1, 2
+                HAVING count(*) >= %s
+                ORDER BY 1, 2
+            """, (min_comments,))
         rows = [{"nick": r[0], "community": r[1]} for r in cur.fetchall()]
     return find(rows)

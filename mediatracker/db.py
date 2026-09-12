@@ -311,6 +311,9 @@ CREATE TABLE IF NOT EXISTS commenter_summary (
     refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS commenter_summary_rank ON commenter_summary (comments DESC, nick);
+-- The communities a nickname writes in: all the anagram index needs, so the
+-- index is built from here instead of by re-reading 4.2M comments.
+ALTER TABLE commenter_summary ADD COLUMN IF NOT EXISTS communities TEXT[] NOT NULL DEFAULT '{}';
 
 -- One profile per analysis SUBJECT: a persona when the nicknames have been
 -- linked, otherwise a bare nickname. `metrics` is computed deterministically
@@ -941,7 +944,8 @@ _COMMENTER_TOTALS = """
            min(cs.posted_at) AS first_seen,
            max(cs.posted_at) AS last_seen,
            count(DISTINCT j.slug) AS journals,
-           sum(cs.like_count) AS total_votes
+           sum(cs.like_count) AS total_votes,
+           array_agg(DISTINCT j.community ORDER BY j.community) AS communities
     FROM comment c
     JOIN comment_snapshot cs ON cs.comment_id = c.id
     JOIN article a ON a.id = c.article_id
@@ -1013,18 +1017,20 @@ def refresh_commenter_summary(conn) -> dict:
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO commenter_summary AS s
-                (nick, comments, articles, first_seen, last_seen, journals, total_votes)
+                (nick, comments, articles, first_seen, last_seen, journals, total_votes,
+                 communities)
         """ + _COMMENTER_TOTALS.format(where="") + """
             ON CONFLICT (nick) DO UPDATE SET
                 comments = EXCLUDED.comments, articles = EXCLUDED.articles,
                 first_seen = EXCLUDED.first_seen, last_seen = EXCLUDED.last_seen,
                 journals = EXCLUDED.journals, total_votes = EXCLUDED.total_votes,
-                refreshed_at = now()
+                communities = EXCLUDED.communities, refreshed_at = now()
             WHERE (s.comments, s.articles, s.first_seen, s.last_seen, s.journals,
-                   s.total_votes)
+                   s.total_votes, s.communities)
                   IS DISTINCT FROM
                   (EXCLUDED.comments, EXCLUDED.articles, EXCLUDED.first_seen,
-                   EXCLUDED.last_seen, EXCLUDED.journals, EXCLUDED.total_votes)
+                   EXCLUDED.last_seen, EXCLUDED.journals, EXCLUDED.total_votes,
+                   EXCLUDED.communities)
         """)
         changed = cur.rowcount
         cur.execute("""
@@ -1034,6 +1040,21 @@ def refresh_commenter_summary(conn) -> dict:
         removed = cur.rowcount
     conn.commit()
     return {"changed": changed, "removed": removed}
+
+
+def commenter_handles_signature(conn) -> str | None:
+    """A fingerprint of which nicknames write in which communities.
+
+    The anagram index depends on that set and on nothing else, so an unchanged
+    fingerprint means an unchanged index. None before the summary is built.
+    """
+    with conn.cursor() as cur:
+        cur.execute(r"""
+            SELECT md5(string_agg(nick || '|' || array_to_string(communities, ','),
+                                  E'\n' ORDER BY nick))
+            FROM commenter_summary
+        """)
+        return cur.fetchone()[0]
 
 
 def get_commenter(conn, nick: str, limit: int = 500) -> dict:
