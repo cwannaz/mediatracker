@@ -234,20 +234,98 @@ function ArticleList({ send, onOpen, days = 0, hidden = EMPTY, onToggleJournal }
   )
 }
 
+const COMMENTER_PAGE = 500
+
+// Coverage of every row loaded so far, summed across pages: the daemon reports
+// each page's own share, and the note describes what is on screen.
+function mergeCoverage(a, b) {
+  if (!a) return b || null
+  if (!b) return a
+  const domains = { ...a.domains }
+  for (const [d, n] of Object.entries(b.domains || {})) domains[d] = (domains[d] || 0) + n
+  return {
+    total: a.total + b.total,
+    matched: a.matched + b.matched,
+    domains: Object.fromEntries(Object.entries(domains).sort((x, y) => y[1] - x[1])),
+  }
+}
+
+// 182k nicknames, read a page at a time as the reader scrolls. The search runs
+// in the database, so nobody has to wait for the whole population to arrive
+// before looking one up.
 function CommenterList({ send, onOpen }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
-  const [rows, err, resp] = useQuery(send, 'browse_commenters', 'commenters', { q: term || null, limit: 500 })
+  const [page, setPage] = useState(1)        // pages asked for under this term
+  const [rows, setRows] = useState(null)
+  const [total, setTotal] = useState(null)
+  const [meta, setMeta] = useState({ note_counts: {}, coverage: null })
+  const [err, setErr] = useState(null)
+  const [done, setDone] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [sentinel, setSentinel] = useState(null)
+
+  // Term and page are set together by a search, so a new term always starts
+  // from the first page rather than at whatever depth the last one reached.
+  const search = () => { setRows(null); setTotal(null); setErr(null); setDone(false); setTerm(q); setPage(1) }
+
+  useEffect(() => {
+    let alive = true
+    const offset = (page - 1) * COMMENTER_PAGE
+    setBusy(true)
+    send('browse_commenters', { q: term || null, limit: COMMENTER_PAGE, offset })
+      .then((r) => {
+        if (!alive) return
+        if (!r.ok) { setErr(r.error); setDone(true); if (!offset) setRows([]); return }
+        const got = r.commenters || []
+        // De-duplicated by nickname: the totals are refreshed every quarter
+        // hour, and a refresh between two pages can move a row across the seam.
+        setRows((prev) => {
+          const base = offset && prev ? prev : []
+          const seen = new Set(base.map((c) => c.nick))
+          return [...base, ...got.filter((c) => !seen.has(c.nick))]
+        })
+        if (!offset) setTotal(r.total ?? null)
+        setMeta((m) => ({
+          note_counts: r.note_counts || {},
+          coverage: mergeCoverage(offset ? m.coverage : null, r.reference_coverage),
+        }))
+        setDone(got.length < COMMENTER_PAGE)
+      })
+      .catch(() => {})
+      .finally(() => { if (alive) setBusy(false) })
+    return () => { alive = false }
+  }, [term, page, send])
+
+  const more = rows !== null && !done && !err
+  // Ask for the next page before the reader reaches the bottom. Re-armed after
+  // each page lands, so a page too short to fill the screen pulls the next one.
+  useEffect(() => {
+    if (!sentinel || !more || busy) return undefined
+    const io = new window.IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setPage((n) => n + 1)
+    }, { rootMargin: '800px 0px' })
+    io.observe(sentinel)
+    return () => io.disconnect()
+  }, [sentinel, more, busy])
+
   return (
     <>
       <div className="toolbar">
         <input type="text" placeholder="Search nicknames (regex, e.g. ^j|_64$)" value={q}
           onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && setTerm(q)} />
-        <button className="btn secondary" onClick={() => setTerm(q)}>Search</button>
+          onKeyDown={(e) => e.key === 'Enter' && search()} />
+        <button className="btn secondary" onClick={search}>Search</button>
       </div>
       {err && <div className="banner warn">{err}</div>}
-      <Coverage c={resp?.reference_coverage} />
+      {rows && (
+        <p className="subtle" style={{ margin: '0 0 6px' }}>
+          {rows.length.toLocaleString()}
+          {total != null && ` of ${total.toLocaleString()}`} nicknames
+          {term && <> matching <code>{term}</code></>}, most comments first.
+        </p>
+      )}
+      <Coverage c={meta.coverage} />
       {!rows ? <div className="empty">Loading…</div> : (
         <div className="table-wrap"><table>
           <thead><tr>
@@ -260,9 +338,9 @@ function CommenterList({ send, onOpen }) {
                 {/* A note nobody can find again is not a record; the marker is
                     the only thing that says which of 3,600 handles carries one. */}
                 <td><strong>{c.nick}</strong>
-                  {resp?.note_counts?.[c.nick] > 0 &&
+                  {meta.note_counts[c.nick] > 0 &&
                     <span className="noted" title="has hand-written notes">
-                      {resp.note_counts[c.nick]}
+                      {meta.note_counts[c.nick]}
                     </span>}
                 </td>
                 <td><HandleForm h={c.handle_form} /></td>
@@ -279,6 +357,13 @@ function CommenterList({ send, onOpen }) {
             ))}
           </tbody>
         </table></div>
+      )}
+      {more && (
+        <div className="more-row" ref={setSentinel}>
+          <button className="linkish" disabled={busy} onClick={() => setPage((n) => n + 1)}>
+            {busy ? 'loading…' : 'load more'}
+          </button>
+        </div>
       )}
     </>
   )

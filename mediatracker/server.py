@@ -39,6 +39,11 @@ INDEX_MAX_BATCHES = 12
 
 
 
+def _rebuild_browser_caches(conn) -> tuple[dict, dict]:
+    """One summary-keeper pass, run in a worker thread."""
+    return db.refresh_commenter_summary(conn), anagrams.load(conn)
+
+
 class Server:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -64,6 +69,9 @@ class Server:
         # a reply held back for minutes would stall every request behind it.
         self.profile_jobs: dict[tuple[str, str, str], dict] = {}
         self._job_tasks: set[asyncio.Task] = set()
+        # The anagram index over every nickname, kept by the summary keeper:
+        # loading it took 3 s, and it used to be loaded for every page.
+        self.anagram_index: dict | None = None
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -101,6 +109,7 @@ class Server:
                 log.warning("API unavailable: %s", exc)
 
         keeper = asyncio.create_task(self._index_keeper())
+        summaries = asyncio.create_task(self._summary_keeper())
 
         async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
@@ -146,6 +155,39 @@ class Server:
                 except Exception:
                     pass
                 conn = None
+
+    async def _summary_keeper(self) -> None:
+        """Keep the commenter browser's totals and anagram index current.
+
+        Both used to be computed per request, on the event loop: 8 s of
+        aggregation and 3 s of anagram index for every page of 500 commenters,
+        with the daemon answering nobody meanwhile. Built once at start, then
+        refreshed on the index keeper's cadence, on a connection of its own for
+        the index keeper's reason.
+        """
+        conn = None
+        while True:
+            try:
+                if conn is None:
+                    conn = await asyncio.to_thread(db.connect, self.cfg)
+                if conn is not None:
+                    done, index = await asyncio.to_thread(_rebuild_browser_caches, conn)
+                    self.anagram_index = index
+                    if done["changed"] or done["removed"]:
+                        log.info("commenter summary: %s changed, %s removed",
+                                 f"{done['changed']:,}", f"{done['removed']:,}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # A stale browser is better than a dead daemon.
+                log.warning("commenter summary refresh failed: %s", exc)
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
+            await asyncio.sleep(INDEX_EVERY_S)
 
     def _seed_journals(self) -> None:
         """Ensure a journal row (with a default schedule) exists for each source.
@@ -444,13 +486,20 @@ class Server:
             # The anagram index is built over the whole corpus, never over the
             # page: a handle's partner is rarely on the same screen, and a
             # page-local index would call it unmatched out of pagination alone.
+            # The summary keeper builds it; only a request that beats the
+            # keeper's first pass pays for loading it here.
+            if self.anagram_index is None:
+                self.anagram_index = anagrams.load(self.conn)
             rows = anagrams.annotate(
                 handles.annotate(nicknames.annotate(rows)),
-                index=anagrams.load(self.conn))
+                index=self.anagram_index)
+            # The total only with the first page: the list is read a page at a
+            # time, and the count does not change as the reader scrolls.
+            extra = {"total": db.count_commenters(self.conn, q=q)} if offset == 0 else {}
             return ok(cmd, commenters=rows,
                       note_counts=db.note_counts(self.conn),
                       reference_coverage=nicknames.coverage(
-                          r["nick"] for r in rows))
+                          r["nick"] for r in rows), **extra)
         if cmd == "get_commenter":
             return ok(cmd, **db.get_commenter(self.conn, msg["nick"], limit=limit))
         if cmd == "browse_authors":

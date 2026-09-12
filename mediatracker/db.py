@@ -295,6 +295,23 @@ CREATE TABLE IF NOT EXISTS persona_alias (
 );
 CREATE INDEX IF NOT EXISTS persona_alias_persona_idx ON persona_alias (persona_id);
 
+-- Per-nickname totals for the commenter browser, kept by the daemon's summary
+-- keeper. Aggregating 4.2M comments per request took 8 s a page, on the event
+-- loop the web app is answered on; a page from here takes milliseconds.
+-- Personas are deliberately NOT copied in: they are edited by hand and must
+-- show at once, so they are joined when the page is read.
+CREATE TABLE IF NOT EXISTS commenter_summary (
+    nick         TEXT PRIMARY KEY,
+    comments     INTEGER NOT NULL,
+    articles     INTEGER NOT NULL,
+    first_seen   TIMESTAMPTZ,
+    last_seen    TIMESTAMPTZ,
+    journals     INTEGER NOT NULL,
+    total_votes  BIGINT,
+    refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS commenter_summary_rank ON commenter_summary (comments DESC, nick);
+
 -- One profile per analysis SUBJECT: a persona when the nicknames have been
 -- linked, otherwise a bare nickname. `metrics` is computed deterministically
 -- from the stored text; the other JSONB columns hold LLM-inferred attributes,
@@ -915,35 +932,108 @@ def get_article(conn, article_id: str, snapshot_id: int | None = None) -> dict |
         return art
 
 
+# The per-nickname aggregate, shared by the summary rebuild and the live
+# fallback so the two can never count differently.
+_COMMENTER_TOTALS = """
+    SELECT c.author_nick AS nick,
+           count(DISTINCT c.id) AS comments,
+           count(DISTINCT c.article_id) AS articles,
+           min(cs.posted_at) AS first_seen,
+           max(cs.posted_at) AS last_seen,
+           count(DISTINCT j.slug) AS journals,
+           sum(cs.like_count) AS total_votes
+    FROM comment c
+    JOIN comment_snapshot cs ON cs.comment_id = c.id
+    JOIN article a ON a.id = c.article_id
+    JOIN journal j ON j.id = a.journal_id
+    WHERE c.author_nick IS NOT NULL {where}
+    GROUP BY c.author_nick
+"""
+
+
 def browse_commenters(conn, *, q: str | None = None, limit: int = 200,
                       offset: int = 0) -> list[dict]:
+    """Nicknames by comment count, one page at a time.
+
+    Read from `commenter_summary`. Aggregated live from the comments only while
+    that table has never been built -- the first seconds on a fresh database --
+    because an empty browser there would read as an empty corpus. The nickname
+    breaks ties, so a page boundary does not reshuffle between requests.
+    """
+    args = {"q": q, "limit": limit, "offset": offset}
     with conn.cursor() as cur:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM commenter_summary)")
+        if cur.fetchone()[0]:
+            source = "commenter_summary s"
+            where = "(%(q)s::text IS NULL OR s.nick ~* %(q)s::text)"
+        else:
+            source = ("(" + _COMMENTER_TOTALS.format(
+                where="AND (%(q)s::text IS NULL OR c.author_nick ~* %(q)s::text)") + ") s")
+            where = "TRUE"
         try:
-            cur.execute("""
-            SELECT c.author_nick AS nick,
-                   count(DISTINCT c.id) AS comments,
-                   count(DISTINCT c.article_id) AS articles,
-                   min(cs.posted_at) AS first_seen,
-                   max(cs.posted_at) AS last_seen,
-                   count(DISTINCT j.slug) AS journals,
-                   sum(cs.like_count) AS total_votes,
-                   max(pa.persona_id) AS persona_id,
-                   max(p.label) AS persona_label
-            FROM comment c
-            JOIN comment_snapshot cs ON cs.comment_id = c.id
-            JOIN article a ON a.id = c.article_id
-            JOIN journal j ON j.id = a.journal_id
-            LEFT JOIN persona_alias pa ON pa.nick = c.author_nick AND pa.journal_slug = '*'
+            cur.execute(f"""
+            SELECT s.nick, s.comments, s.articles, s.first_seen, s.last_seen,
+                   s.journals, s.total_votes,
+                   pa.persona_id, p.label AS persona_label
+            FROM {source}
+            LEFT JOIN persona_alias pa ON pa.nick = s.nick AND pa.journal_slug = '*'
             LEFT JOIN persona p ON p.id = pa.persona_id
-            WHERE c.author_nick IS NOT NULL
-              AND (%(q)s::text IS NULL OR c.author_nick ~* %(q)s::text)
-            GROUP BY c.author_nick
-            ORDER BY comments DESC
+            WHERE {where}
+            ORDER BY s.comments DESC, s.nick
             LIMIT %(limit)s OFFSET %(offset)s
-            """, {"q": q, "limit": limit, "offset": offset})
+            """, args)
         except Exception as exc:
             _guard_regex(exc)
         return _rows(cur)
+
+
+def count_commenters(conn, *, q: str | None = None) -> int | None:
+    """How many nicknames the browser holds, or match `q`. None until the
+    summary is built: a live count would cost what the summary exists to avoid."""
+    with conn.cursor() as cur:
+        try:
+            cur.execute("""
+                SELECT CASE WHEN EXISTS (SELECT 1 FROM commenter_summary)
+                            THEN (SELECT count(*) FROM commenter_summary
+                                  WHERE %(q)s::text IS NULL OR nick ~* %(q)s::text)
+                       END
+            """, {"q": q})
+        except Exception as exc:
+            _guard_regex(exc)
+        return cur.fetchone()[0]
+
+
+def refresh_commenter_summary(conn) -> dict:
+    """Bring the commenter browser's per-nickname totals up to date.
+
+    Writes only rows whose totals moved, so a routine pass touches the handful
+    of nicknames that commented since the last one rather than rewriting all
+    182k; a full rewrite every quarter hour would be 182k dead rows each time.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO commenter_summary AS s
+                (nick, comments, articles, first_seen, last_seen, journals, total_votes)
+        """ + _COMMENTER_TOTALS.format(where="") + """
+            ON CONFLICT (nick) DO UPDATE SET
+                comments = EXCLUDED.comments, articles = EXCLUDED.articles,
+                first_seen = EXCLUDED.first_seen, last_seen = EXCLUDED.last_seen,
+                journals = EXCLUDED.journals, total_votes = EXCLUDED.total_votes,
+                refreshed_at = now()
+            WHERE (s.comments, s.articles, s.first_seen, s.last_seen, s.journals,
+                   s.total_votes)
+                  IS DISTINCT FROM
+                  (EXCLUDED.comments, EXCLUDED.articles, EXCLUDED.first_seen,
+                   EXCLUDED.last_seen, EXCLUDED.journals, EXCLUDED.total_votes)
+        """)
+        changed = cur.rowcount
+        cur.execute("""
+            DELETE FROM commenter_summary s
+            WHERE NOT EXISTS (SELECT 1 FROM comment c WHERE c.author_nick = s.nick)
+        """)
+        removed = cur.rowcount
+    conn.commit()
+    return {"changed": changed, "removed": removed}
 
 
 def get_commenter(conn, nick: str, limit: int = 500) -> dict:
