@@ -74,6 +74,22 @@ def test_a_finished_run_can_be_run_again(monkeypatch):
     assert len(calls) == 2
 
 
+def test_a_full_read_is_asked_for_and_passed_on(monkeypatch):
+    calls = []
+    monkeypatch.setattr(profiling, "analyse_subject",
+                        lambda conn, **kw: calls.append(kw) or {"corrections": []})
+    monkeypatch.setattr(db, "connect", lambda cfg: _C())
+
+    async def go():
+        s = _server()
+        started = json.loads(s._profile_run("build_profile", {**MSG, "full": True}))
+        await asyncio.gather(*list(s._job_tasks))
+        return started
+    started = asyncio.run(go())
+    assert started["job"]["full"] is True, "the page shows which kind of run is going"
+    assert calls[0]["max_chars"] is None, "a full read lifts the dossier's budget"
+
+
 def test_an_unknown_subject_kind_is_refused():
     with pytest.raises(ValueError):
         _server()._profile_run("build_profile", {**MSG, "kind": "table"})

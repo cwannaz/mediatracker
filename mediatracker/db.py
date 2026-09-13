@@ -361,6 +361,9 @@ ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFA
 -- a name would answer a question this study is not asking, so the block
 -- describes a person without setting out to locate one.
 ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS milieu JSONB NOT NULL DEFAULT '{}';
+-- Whether the reader was shown every comment or an even sample of a history
+-- too long for the budget. NULL: written before this was recorded.
+ALTER TABLE author_profile ADD COLUMN IF NOT EXISTS dossier_sampled BOOLEAN;
 ALTER TABLE persona ADD COLUMN IF NOT EXISTS community TEXT NOT NULL DEFAULT 'lematin';
 
 -- persona_alias already scoped by journal, but '*' (every journal) is the wrong

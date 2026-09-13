@@ -157,6 +157,28 @@ def test_a_full_read_quotes_every_comment_where_the_default_samples(page_run, mo
     assert all(f"numéro {i:03d}" in prompt for i in range(25))
 
 
+def test_a_run_reports_what_it_cost(page_run):
+    page_run["reply"](_stream({"type": "result", "is_error": False, "structured_output": PROFILE,
+                               "total_cost_usd": 0.64, "duration_ms": 273007,
+                               "usage": {"input_tokens": 2, "cache_read_input_tokens": 175896,
+                                         "cache_creation_input_tokens": 0,
+                                         "output_tokens": 22082}}))
+    out = pr.analyse_subject(_Conn(), community="lematin", kind="persona", key="1")
+    # A dossier read back from the cache is still the dossier: it counts as input.
+    assert out["tokens"] == {"input": 175898, "output": 22082}
+    assert out["seconds"] == 273 and out["usd"] == 0.64
+
+
+def test_a_stored_profile_records_whether_it_was_sampled():
+    entry = pr.dossier(_subject(), "n_x_202_page")[1]
+    conn = _Conn()
+    pr.ingest(conn, [{"id": "n_x_202_page", "profile": json.loads(json.dumps(PROFILE)),
+                      "model": "claude-opus-5"}], {"n_x_202_page": entry})
+    sql, params = conn.log[-1]
+    assert "dossier_sampled=EXCLUDED.dossier_sampled" in sql, "a re-run must overwrite it"
+    assert params[-1] is False
+
+
 def test_a_wrapped_reply_is_unwrapped(page_run):
     page_run["reply"](_stream({"type": "result", "is_error": False, "structured_output": None,
                                "result": json.dumps({"id": "x", "profile": PROFILE})}))

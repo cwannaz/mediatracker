@@ -70,9 +70,9 @@ export default function ProfilePanel({ nick, personaId, send }) {
     return () => clearInterval(t)
   }, [running, subject?.community, subject?.kind, subject?.key, send])
 
-  const run = () => {
+  const run = (full) => {
     if (!subject) return
-    send('build_profile', { community: subject.community, kind: subject.kind, key: subject.key })
+    send('build_profile', { community: subject.community, kind: subject.kind, key: subject.key, full })
       .then((r) => {
         if (r.ok) setSubjects((subs) => subs.map((s) => (s.community === r.community ? { ...s, job: r.job } : s)))
       })
@@ -287,6 +287,24 @@ function Gender({ g }) {
 const fmtDate = (iso) => new Date(iso).toLocaleDateString()
 const fmtTime = (secs) => new Date(secs * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
+// Profiles from before this was recorded say nothing rather than guess.
+function readOf(sampled) {
+  if (sampled === true) return ', read as an even sample'
+  if (sampled === false) return ', every one read'
+  return ''
+}
+
+// What a finished run cost, as the CLI reported it. List price: the
+// subscription is not billed per token.
+function cost(r) {
+  if (!r || !r.tokens) return ''
+  const k = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+  const secs = r.seconds || 0
+  const took = `${secs >= 60 ? `${Math.floor(secs / 60)} min ` : ''}${secs % 60} s`
+  const usd = r.usd != null ? `, $${r.usd.toFixed(2)} at list price` : ''
+  return ` in ${took}: ${k(r.tokens.input)} tokens in, ${k(r.tokens.output)} out${usd}`
+}
+
 // Which community's subject is shown, and the analysis pass for that one
 // subject, run now rather than at the next batch.
 function AnalysisBar({ subjects, community, setCommunity, subject, onRun }) {
@@ -295,6 +313,7 @@ function AnalysisBar({ subjects, community, setCommunity, subject, onRun }) {
   const running = job?.state === 'running'
   const enough = subject && subject.n_comments >= MIN_COMMENTS
   const where = subject ? (COMMUNITIES[subject.community] || subject.community) : ''
+  const replaces = subject?.profiled_at ? ' Replaces the stored profile for this community.' : ''
   return (
     <div className="card">
       <h2>Analysis pass</h2>
@@ -313,25 +332,31 @@ function AnalysisBar({ subjects, community, setCommunity, subject, onRun }) {
           {subject.kind === 'persona' ? subject.label : `«${subject.label}»`} on {where}:{' '}
           {subject.n_comments} comments.{' '}
           {subject.profiled_at
-            ? `Profiled ${fmtDate(subject.profiled_at)} from ${subject.profiled_comments} comments.`
+            ? `Profiled ${fmtDate(subject.profiled_at)} from ${subject.profiled_comments} comments${readOf(subject.profiled_sampled)}.`
             : 'Not profiled yet.'}
         </p>
       )}
       <div className="row" style={{ flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 10 }}>
-        <button className="btn" disabled={!enough || running} onClick={onRun}
-          title={subject?.profiled_at ? 'Replaces the stored profile for this community' : undefined}>
-          {running ? 'Analysing…' : subject?.profiled_at ? 'Re-run analysis' : 'Run analysis'}
+        <button className="btn" disabled={!enough || running} onClick={() => onRun(false)}
+          title={'Quotes up to 60,000 characters: a long history is read as an even sample.' + replaces}>
+          {running && !job.full ? 'Analysing…' : subject?.profiled_at ? 'Re-run analysis' : 'Run analysis'}
+        </button>
+        <button className="btn" disabled={!enough || running} onClick={() => onRun(true)}
+          title={'Quotes every comment. On a long history that is several times the tokens: '
+            + '863 comments came to 176k tokens in, about $1.65 at list price and a point '
+            + 'of the five-hour window.' + replaces}>
+          {running && job.full ? 'Reading everything…' : 'Full read'}
         </button>
         {running && (
           <span className="subtle">
-            Started {fmtTime(job.started_at)}. Reading the whole history takes a few
-            minutes; you can leave this page.
+            Started {fmtTime(job.started_at)}{job.full ? ', reading every comment' : ''}. This
+            takes a few minutes; you can leave this page.
           </span>
         )}
         {!running && job?.state === 'failed' && <span className="subtle">Failed: {job.error}</span>}
         {!running && job?.state === 'done' && (
           <span className="subtle">
-            Done{job.result?.corrections?.length
+            Done{cost(job.result)}{job.result?.corrections?.length
               ? ` — ${job.result.corrections.length} correction(s) applied on ingest` : ''}.
           </span>
         )}

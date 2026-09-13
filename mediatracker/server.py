@@ -581,7 +581,11 @@ class Server:
         # A second click while a run is going reports that run: one subject,
         # one call, however many times the button is pressed.
         if cmd == "build_profile" and (job is None or job["state"] != "running"):
-            job = {"state": "running", "started_at": time.time()}
+            # A full read quotes every comment instead of the batch pass's even
+            # sample -- several times the tokens on a long history, so it is
+            # asked for, never the default.
+            job = {"state": "running", "started_at": time.time(),
+                   "full": bool(msg.get("full"))}
             self.profile_jobs[subject] = job
             task = asyncio.create_task(self._profile_job(subject, job))
             self._job_tasks.add(task)
@@ -600,9 +604,10 @@ class Server:
             conn = await asyncio.to_thread(db.connect, self.cfg)
             if conn is None:
                 raise RuntimeError("no database connection")
+            budget = {"max_chars": None} if job.get("full") else {}
             result = await asyncio.to_thread(
                 partial(profiling.analyse_subject, conn,
-                        community=community, kind=kind, key=key))
+                        community=community, kind=kind, key=key, **budget))
             job.update(state="done", result=result)
             log.info("profile built for %s/%s/%s: %s", community, kind, key, result)
         except Exception as exc:

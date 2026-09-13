@@ -582,8 +582,9 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                 INSERT INTO author_profile
                     (community, subject_kind, subject_key, label, n_comments, n_chars,
                      first_seen, last_seen, metrics, language, gender, politics,
-                     philosophy, region, topics, milieu, notes, model, computed_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                     philosophy, region, topics, milieu, notes, model, dossier_sampled,
+                     computed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                 ON CONFLICT (community, subject_kind, subject_key) DO UPDATE SET
                     label=EXCLUDED.label, n_comments=EXCLUDED.n_comments,
                     n_chars=EXCLUDED.n_chars, first_seen=EXCLUDED.first_seen,
@@ -592,7 +593,8 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                     politics=EXCLUDED.politics, philosophy=EXCLUDED.philosophy,
                     region=EXCLUDED.region, topics=EXCLUDED.topics,
                     milieu=EXCLUDED.milieu,
-                    notes=EXCLUDED.notes, model=EXCLUDED.model, computed_at=now()
+                    notes=EXCLUDED.notes, model=EXCLUDED.model,
+                    dossier_sampled=EXCLUDED.dossier_sampled, computed_at=now()
             """, (
                 # Profiles written before communities existed were all Le Matin,
                 # which is what the column defaults to; a manifest entry from
@@ -605,6 +607,9 @@ def ingest(conn, records: list[dict], manifest_by_id: dict) -> tuple[int, list[s
                 db._jsonb(p.get("philosophy")), db._jsonb(p.get("region")),
                 db._jsonb(p.get("topics")), db._jsonb(p.get("milieu")),
                 p.get("notes"), rec.get("model"),
+                # Whether the reader was shown every comment or an even sample;
+                # None for a manifest written before that was recorded.
+                meta.get("dossier_sampled"),
             ))
         n += 1
     if missing:
@@ -660,13 +665,15 @@ def subject_options(conn, *, nick: str | None = None,
             out.append({"community": community, "kind": kind, "key": key,
                         "label": label, "n_comments": n})
         for o in out:
-            cur.execute("SELECT computed_at, n_comments, model FROM author_profile "
+            cur.execute("SELECT computed_at, n_comments, model, dossier_sampled "
+                        "FROM author_profile "
                         "WHERE community = %s AND subject_kind = %s AND subject_key = %s",
                         (o["community"], o["kind"], o["key"]))
             prof = cur.fetchone()
             o.update(profiled_at=prof[0].isoformat() if prof else None,
                      profiled_comments=prof[1] if prof else None,
-                     model=prof[2] if prof else None)
+                     model=prof[2] if prof else None,
+                     profiled_sampled=prof[3] if prof else None)
     out.sort(key=lambda o: -o["n_comments"])
     return out
 
@@ -729,9 +736,16 @@ def analyse_subject(conn, *, community: str, kind: str, key: str,
     _, corrections = ingest(conn, [{"id": sid, "profile": profile, "model": used}],
                             {sid: entry})
     conn.commit()
+    usage = env.get("usage") or {}
     return {"community": community, "kind": kind, "key": key,
             "n_comments": entry["n_comments"], "sampled": entry["dossier_sampled"],
             "model": used, "usd": env.get("total_cost_usd"),
+            # Cache reads are input too: the same dossier, read again.
+            "tokens": {"input": sum(usage.get(k) or 0 for k in (
+                           "input_tokens", "cache_read_input_tokens",
+                           "cache_creation_input_tokens")),
+                       "output": usage.get("output_tokens") or 0},
+            "seconds": round((env.get("duration_ms") or 0) / 1000),
             "corrections": corrections}
 
 
