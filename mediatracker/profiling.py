@@ -673,13 +673,17 @@ def subject_options(conn, *, nick: str | None = None,
 
 def analyse_subject(conn, *, community: str, kind: str, key: str,
                     model: str = PROFILE_MODEL,
-                    timeout: float = PROFILE_TIMEOUT) -> dict:
+                    timeout: float = PROFILE_TIMEOUT,
+                    max_chars: int | None = 60000) -> dict:
     """Profile one subject now: build its dossier, one `claude -p` read, ingest.
 
     The same contract, dossier and ingest as the batch pass -- including the
     corrections `_reconcile` makes against the measured metrics -- so a profile
     written from the page is not a second kind of profile. Replaces any profile
     already stored for the subject in that community.
+
+    `max_chars` is the batch pass's budget by default; None quotes every
+    comment instead of an even sample, for a subject worth a full read.
     """
     from .entities import _parse_stream, claude_env
 
@@ -689,7 +693,7 @@ def analyse_subject(conn, *, community: str, kind: str, key: str,
                          f"in {community}: nothing to profile yet")
     s = found[0]
     sid = f"{'p' if kind == 'persona' else 'n'}_{_safe(community)}_{_safe(s['label'])}_page"
-    text, entry = dossier(s, sid)
+    text, entry = dossier(s, sid, float("inf") if max_chars is None else max_chars)
     with open(SPEC_PATH, encoding="utf-8") as fh:
         spec = fh.read()
     prompt = (f"{spec}\n\n"

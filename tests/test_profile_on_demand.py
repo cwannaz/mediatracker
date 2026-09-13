@@ -140,6 +140,23 @@ def test_the_prompt_carries_the_contract_and_goes_on_stdin(page_run):
     assert kw["env"] == {"CLAUDE_CONFIG_DIR": "/x"}, "billed to the account the tool names"
 
 
+def test_a_full_read_quotes_every_comment_where_the_default_samples(page_run, monkeypatch):
+    long = _subject(n=25)                   # one comment a day, so August caps n
+    for i, c in enumerate(long["comments"]):
+        c["body_text"] = f"commentaire numéro {i:03d} " + "x" * 2600   # 65k > 60k
+    monkeypatch.setattr(pr, "build_subjects", lambda conn, n, **kw: [long])
+    page_run["reply"](_stream({"type": "result", "is_error": False,
+                               "structured_output": PROFILE}))
+
+    out = pr.analyse_subject(_Conn(), community="lematin", kind="persona", key="1")
+    assert out["sampled"], "the page button keeps the batch pass's budget"
+    out = pr.analyse_subject(_Conn(), community="lematin", kind="persona", key="1",
+                             max_chars=None)
+    prompt = page_run["calls"][-1][1]["input"]
+    assert not out["sampled"]
+    assert all(f"numéro {i:03d}" in prompt for i in range(25))
+
+
 def test_a_wrapped_reply_is_unwrapped(page_run):
     page_run["reply"](_stream({"type": "result", "is_error": False, "structured_output": None,
                                "result": json.dumps({"id": "x", "profile": PROFILE})}))
