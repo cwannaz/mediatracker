@@ -229,11 +229,45 @@ def test_the_window_reading_comes_from_the_stream(monkeypatch):
                       _window(0.42), reply), monkeypatch)
     got = e.extract([{"title": "t", "body": "b"}])
     assert got[1] == [{"name": "Sion", "kind": "place"}]
-    assert got["_quota"] == {"used": 0.42, "resets_at": 1_789_255_800}
+    assert got["_quota"] == {"used": 0.42, "resets_at": 1_789_255_800,
+                             "week_used": 0.9, "week_resets_at": 1_789_255_800}
 
 
 def test_the_seven_day_window_is_not_read_as_the_five_hour_one():
     assert e._quota_of(_window(0.1)["rate_limit_info"])["used"] == 0.1
+
+
+def test_the_seven_day_window_is_read_alongside_the_five_hour_one():
+    # A job that runs for days empties the week without ever crossing the
+    # five-hour ceiling, so the week has to be read as well.
+    q = e._quota_of(_window(0.1)["rate_limit_info"])
+    assert q["used"] == 0.1 and q["week_used"] == 0.9
+
+
+def test_a_rejected_seven_day_window_reads_as_full():
+    info = _window(0.1, status="rejected")["rate_limit_info"]
+    info["rateLimitType"] = "seven_day"
+    q = e._quota_of(info)
+    assert q["week_used"] == 1.0
+    assert q["used"] == 0.1, "a weekly refusal says nothing about the hour"
+
+
+def test_the_week_alone_is_enough_to_be_over():
+    assert e.over_ceiling({"used": 0.1, "week_used": 0.45}) == "seven-day"
+    assert e.over_ceiling({"used": 0.6, "week_used": 0.1}) == "five-hour"
+    assert e.over_ceiling({"used": 0.1, "week_used": 0.1}) is None
+    assert e.over_ceiling({"used": 0.1, "week_used": None}) is None, "no reading, no claim"
+
+
+def test_a_full_week_waits_for_the_weekly_reset_not_the_hourly_one(monkeypatch):
+    # Waiting out the five-hour reset while the week is full would start
+    # another spell of work the rule forbids.
+    slept = []
+    monkeypatch.setattr(e, "_sleep", slept.append)
+    now = time.time()
+    e._wait_for_window({"used": 0.1, "resets_at": now + 600,
+                        "week_used": 0.45, "week_resets_at": now + 86_400}, 0.5)
+    assert slept and slept[0] > 80_000, "it must wait out the week, not the hour"
 
 
 def test_a_rejected_five_hour_window_reads_as_full():
@@ -301,6 +335,24 @@ def test_the_run_pauses_at_the_ceiling_and_resumes_after_the_reset(monkeypatch):
     assert sorted(recorded, key=int) == [str(i) for i in range(500)], \
         "every document recorded exactly once across the pause"
     assert out["complete"] is True and out["paused"] == 1
+
+
+def test_the_run_pauses_on_the_week_with_the_hour_still_free(monkeypatch):
+    state = {"calls": 0, "slept": []}
+    resets = time.time() + 3600
+
+    def extract(batch, **kw):
+        state["calls"] += 1
+        week = 0.1 if state["slept"] else 0.45
+        return {**{i: [] for i in range(1, len(batch) + 1)}, "_usage": {},
+                "_quota": {"used": 0.1, "resets_at": resets,
+                           "week_used": week, "week_resets_at": resets + 86_400}}
+
+    monkeypatch.setattr(e, "_sleep", state["slept"].append)
+    conn, recorded = _run_fixture(monkeypatch, extract, n_docs=200)
+    out = e.run(conn, workers=1)
+    assert len(state["slept"]) == 1 and state["slept"][0] > 80_000
+    assert out["paused"] == 1 and len(recorded) == 200, "the work still finishes"
 
 
 def test_a_full_window_pauses_instead_of_tripping_the_breaker(monkeypatch):

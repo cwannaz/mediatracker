@@ -68,6 +68,10 @@ def page_run(monkeypatch, tmp_path):
     spec.write_text("# Commenter profiling contract\n")
     monkeypatch.setattr(pr, "SPEC_PATH", str(spec))
     monkeypatch.setattr(entities, "claude_env", lambda: {"CLAUDE_CONFIG_DIR": "/x"})
+    # The run asks the account how full its windows are before spending; a
+    # test must not shell out for that.
+    monkeypatch.setattr(entities, "quota_now", lambda *a, **k: {
+        "used": 0.1, "resets_at": None, "week_used": 0.1, "week_resets_at": None})
     monkeypatch.setattr(pr, "build_subjects", lambda conn, n, **kw: [_subject()])
     seen = {"ingested": None, "calls": []}
 
@@ -193,6 +197,18 @@ def test_a_failed_call_raises_with_its_reason_and_writes_nothing(page_run):
     with pytest.raises(RuntimeError, match="usage limit"):
         pr.analyse_subject(conn, community="tx-romandie", kind="nick", key="202")
     assert page_run["ingested"] is None and not conn.committed
+
+
+def test_a_run_is_refused_over_a_ceiling_before_it_spends(page_run, monkeypatch):
+    import time as _t
+    monkeypatch.setattr(entities, "quota_now", lambda *a, **k: {
+        "used": 0.1, "resets_at": None,
+        "week_used": 0.44, "week_resets_at": _t.time() + 3600})
+    page_run["reply"](_stream({"type": "result", "is_error": False,
+                               "structured_output": PROFILE}))
+    with pytest.raises(RuntimeError, match="seven-day"):
+        pr.analyse_subject(_Conn(), community="lematin", kind="persona", key="1")
+    assert page_run["calls"] == [], "the expensive call must not be made at all"
 
 
 def test_too_few_comments_is_a_named_error(page_run, monkeypatch):

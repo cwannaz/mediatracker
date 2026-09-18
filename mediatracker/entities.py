@@ -113,6 +113,11 @@ GIVE_UP_AFTER = 12
 # already running when the ceiling is seen still land, so a pause begins a
 # point or two above it.
 QUOTA_CEILING = 0.50
+# The seven-day window refills far more slowly than the five-hour one and is
+# shared with Cedric's own sessions. A worker that runs for days would empty
+# it while never once crossing the five-hour ceiling, so the week is a
+# ceiling of its own.
+WEEK_CEILING = 0.40
 # Called again this long after the reported reset: the reset is given to the
 # minute, and a call made a few seconds early would read the old window.
 RESET_GRACE_S = 120
@@ -419,22 +424,60 @@ def _parse_stream(text: str) -> tuple[dict | None, dict | None]:
 
 
 def _quota_of(info: dict) -> dict | None:
-    """Five-hour utilization (0-1) and reset time, from a rate_limit_event.
+    """Both rolling windows, from a rate_limit_event.
 
-    The event also carries the seven-day window; only the five-hour one is
-    read. A refusal on the five-hour window reads as full whatever the
-    utilization figure says.
+    The five-hour window paces an afternoon; the seven-day one paces a job that
+    runs for days, and only the stream reports either. A refusal reads as full
+    on whichever window refused, whatever its utilization figure says.
     """
-    window = (info.get("unifiedWindows") or {}).get("five_hour") or {}
-    used = window.get("utilization")
-    resets = window.get("resetsAt")
+    windows = info.get("unifiedWindows") or {}
+    hour = windows.get("five_hour") or {}
+    week = windows.get("seven_day") or {}
+    used, resets = hour.get("utilization"), hour.get("resetsAt")
+    week_used, week_resets = week.get("utilization"), week.get("resetsAt")
+    refused = info.get("status") == "rejected"
     if info.get("rateLimitType") == "five_hour":
         resets = resets or info.get("resetsAt")
-        if info.get("status") == "rejected":
+        if refused:
             used = 1.0
+    elif info.get("rateLimitType") == "seven_day":
+        week_resets = week_resets or info.get("resetsAt")
+        if refused:
+            week_used = 1.0
     if not isinstance(used, (int, float)):
         return None
-    return {"used": float(used), "resets_at": resets}
+    return {"used": float(used), "resets_at": resets,
+            "week_used": float(week_used) if isinstance(week_used, (int, float)) else None,
+            "week_resets_at": week_resets}
+
+
+def quota_now(model: str = "haiku") -> dict | None:
+    """Read the windows with one throwaway call, before spending on a big one.
+
+    A long call reports its quota only once it has already been paid for, which
+    is no use to a caller that must not start over the ceiling. This costs a
+    fraction of a cent and answers first.
+    """
+    p = subprocess.run(
+        ["claude", "-p", "--model", model, "--no-session-persistence",
+         "--output-format", "stream-json", "--verbose"],
+        input="Reply with the single word OK.", capture_output=True, text=True,
+        timeout=120, env=claude_env())
+    _, quota = _parse_stream(p.stdout)
+    return quota
+
+
+def over_ceiling(quota: dict | None, *, ceiling: float = QUOTA_CEILING,
+                 week_ceiling: float = WEEK_CEILING) -> str | None:
+    """Which window is at or over its ceiling, if either. One rule, one place."""
+    if not quota:
+        return None
+    week_used = quota.get("week_used")
+    if isinstance(week_used, (int, float)) and week_used >= week_ceiling:
+        return "seven-day"
+    if quota.get("used") is not None and quota["used"] >= ceiling:
+        return "five-hour"
+    return None
 
 
 def _read(env: dict, batch: list[dict]) -> dict:
@@ -581,24 +624,34 @@ def estimate(conn, *, kind: str = "article", with_body_only: bool = False) -> di
 _sleep = time.sleep     # a seam: a test must not wait out a five-hour window
 
 
-def _wait_for_window(quota: dict, ceiling: float) -> float:
-    """Sleep until the five-hour window resets. Returns the seconds waited."""
+def _wait_for_window(quota: dict, ceiling: float,
+                     week_ceiling: float = WEEK_CEILING) -> float:
+    """Sleep until the window that is over its ceiling resets.
+
+    The week is checked first: waiting out the five-hour reset while the week
+    is full would just start another spell of work the rule forbids -- and a
+    weekly wait is measured in days, so the log says the day as well.
+    """
     now = time.time()
-    resets = quota.get("resets_at")
+    weekly = over_ceiling(quota, ceiling=ceiling, week_ceiling=week_ceiling) == "seven-day"
+    used = quota.get("week_used") if weekly else quota["used"]
+    limit = week_ceiling if weekly else ceiling
+    resets = quota.get("week_resets_at") if weekly else quota.get("resets_at")
     if isinstance(resets, (int, float)) and resets > now:
         wait = resets - now + RESET_GRACE_S
     else:
         wait = QUOTA_RECHECK_S
-    log.warning("five-hour window at %.0f%% (ceiling %.0f%%): pausing %.0f min, until %s",
-                100 * quota["used"], 100 * ceiling, wait / 60,
-                time.strftime("%H:%M", time.localtime(now + wait)))
+    log.warning("%s window at %.0f%% (ceiling %.0f%%): pausing %.0f min, until %s",
+                "seven-day" if weekly else "five-hour", 100 * used, 100 * limit,
+                wait / 60, time.strftime("%a %H:%M", time.localtime(now + wait)))
     _sleep(wait)
     return wait
 
 
 def run(conn, *, kind: str = "article", limit: int | None = None,
         with_body_only: bool = False, workers: int = 1, model: str = MODEL,
-        progress=None, quota_ceiling: float = QUOTA_CEILING) -> dict:
+        progress=None, quota_ceiling: float = QUOTA_CEILING,
+        week_ceiling: float = WEEK_CEILING) -> dict:
     """Read pending documents and store what comes back. Resumable throughout.
 
     Calls run in a thread pool -- each is a separate `claude` process, so the
@@ -625,8 +678,9 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
 
     workers = max(1, workers)
     todo = deque(batches)
-    quota = None            # latest five-hour reading: {"used": 0-1, "resets_at"}
+    quota = None            # latest reading: both windows, see _quota_of
     band = -1               # last 10% step logged, so the journal shows the climb
+    week_band = -1          # the week moves slowly: logged every 5%
     paused = 0
     paused_s = 0.0
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -643,7 +697,8 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
                 inflight.append((b, pool.submit(extract, b, model=model)))
 
         def over() -> bool:
-            return quota is not None and quota["used"] >= quota_ceiling
+            return over_ceiling(quota, ceiling=quota_ceiling,
+                                week_ceiling=week_ceiling) is not None
 
         fill()
         while inflight or todo:
@@ -654,7 +709,7 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
                 # without anyone restarting the worker.
                 if over():
                     paused += 1
-                    paused_s += _wait_for_window(quota, quota_ceiling)
+                    paused_s += _wait_for_window(quota, quota_ceiling, week_ceiling)
                     quota, band = None, -1
                 fill()
                 continue
@@ -668,6 +723,11 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
                 if int(reading["used"] * 10) > band:
                     band = int(reading["used"] * 10)
                     log.info("five-hour window at %.0f%%", 100 * reading["used"])
+                week_used = reading.get("week_used")
+                if isinstance(week_used, (int, float)) and int(week_used * 20) > week_band:
+                    week_band = int(week_used * 20)
+                    log.info("seven-day window at %.0f%% (ceiling %.0f%%)",
+                             100 * week_used, 100 * week_ceiling)
             if got.pop("_failed", False):
                 if over():
                     # Refused because the window is full -- by this worker or
@@ -809,6 +869,8 @@ def main(argv=None) -> int:
             s.add_argument("--limit", type=int, default=None)
             s.add_argument("--workers", type=int, default=1)
             s.add_argument("--model", default=MODEL)
+            s.add_argument("--week-ceiling", type=float, default=WEEK_CEILING,
+                           help="pause when the seven-day window passes this")
             s.add_argument("--quota-ceiling", type=float, default=QUOTA_CEILING,
                            help="pause when the five-hour window is this full (0-1)")
     t = sub.add_parser("top")
@@ -838,6 +900,7 @@ def main(argv=None) -> int:
                                  with_body_only=a.with_body_only,
                                  workers=a.workers, model=a.model,
                                  quota_ceiling=a.quota_ceiling,
+                                 week_ceiling=a.week_ceiling,
                                  progress=show), indent=1))
         except NotLoggedIn as exc:
             print(f"cannot run: {exc}")
