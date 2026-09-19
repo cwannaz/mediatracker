@@ -118,6 +118,12 @@ QUOTA_CEILING = 0.50
 # it while never once crossing the five-hour ceiling, so the week is a
 # ceiling of its own.
 WEEK_CEILING = 0.40
+# Claude-backed analysis is held until this local time, because the weekly
+# subscription is needed by other projects. Set MT_LLM_PAUSED_UNTIL to another
+# "YYYY-MM-DD HH:MM" to move it, or to an empty string to lift it. Only work
+# that CALLS Claude is affected: the crawl, the body backfill and the web app
+# are untouched.
+PAUSED_UNTIL = "2026-09-24 22:00"
 # Called again this long after the reported reset: the reset is given to the
 # minute, and a call made a few seconds early would read the old window.
 RESET_GRACE_S = 120
@@ -254,6 +260,28 @@ def normalise(name: str) -> str:
 # --------------------------------------------------------------------------- #
 # the model call
 # --------------------------------------------------------------------------- #
+
+class Paused(RuntimeError):
+    """Claude-backed work is deliberately held until a date. Not a failure."""
+
+
+def paused_until(now: float | None = None) -> float | None:
+    """When the hold ends, or None if there is no hold in force."""
+    raw = os.environ.get("MT_LLM_PAUSED_UNTIL", PAUSED_UNTIL)
+    if not (raw or "").strip():
+        return None
+    when = time.mktime(time.strptime(raw.strip(), "%Y-%m-%d %H:%M"))
+    return when if when > (now if now is not None else time.time()) else None
+
+
+def check_not_paused(what: str = "this run") -> None:
+    """Raise if Claude-backed work is on hold. Called BEFORE anything is spent."""
+    until = paused_until()
+    if until:
+        raise Paused(f"Claude-backed analysis is paused until "
+                     f"{time.strftime('%a %d %b %H:%M', time.localtime(until))}; "
+                     f"{what} will not start. MT_LLM_PAUSED_UNTIL changes it.")
+
 
 class NotLoggedIn(RuntimeError):
     """`claude` is absent, or has no usable session."""
@@ -663,6 +691,7 @@ def run(conn, *, kind: str = "article", limit: int | None = None,
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor
 
+    check_not_paused("entity extraction")
     ensure_schema(conn)
     ok, why = available()
     if not ok:
@@ -902,7 +931,7 @@ def main(argv=None) -> int:
                                  quota_ceiling=a.quota_ceiling,
                                  week_ceiling=a.week_ceiling,
                                  progress=show), indent=1))
-        except NotLoggedIn as exc:
+        except (NotLoggedIn, Paused) as exc:
             print(f"cannot run: {exc}")
             return 2
     return 0

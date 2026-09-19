@@ -211,6 +211,14 @@ def test_a_run_is_refused_over_a_ceiling_before_it_spends(page_run, monkeypatch)
     assert page_run["calls"] == [], "the expensive call must not be made at all"
 
 
+def test_a_dated_hold_stops_a_profile_run(page_run, monkeypatch):
+    # The button is the other way onto the subscription; the hold covers it too.
+    monkeypatch.setenv("MT_LLM_PAUSED_UNTIL", "2099-01-01 00:00")
+    with pytest.raises(RuntimeError, match="paused until"):
+        pr.analyse_subject(_Conn(), community="lematin", kind="persona", key="1")
+    assert page_run["calls"] == []
+
+
 def test_too_few_comments_is_a_named_error(page_run, monkeypatch):
     monkeypatch.setattr(pr, "build_subjects", lambda conn, n, **kw: [])
     with pytest.raises(ValueError, match="fewer than 5"):

@@ -3,6 +3,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from mediatracker import entities as e
 
 
@@ -285,6 +287,22 @@ def test_a_full_window_is_not_retried(monkeypatch):
     monkeypatch.setattr(e.time, "sleep", lambda s: None)
     got = e.extract([{"title": "t", "body": "b"}], retries=3)
     assert got["_failed"] is True and calls["n"] == 1
+
+
+def test_a_dated_hold_stops_a_run_before_anything_is_spent(monkeypatch):
+    # Cedric needs the weekly subscription elsewhere: the hold has to refuse
+    # BEFORE the first call, not pause after it.
+    monkeypatch.setenv("MT_LLM_PAUSED_UNTIL", "2099-01-01 00:00")
+    calls = []
+    monkeypatch.setattr(e, "extract", lambda *a, **k: calls.append(1) or {})
+    with pytest.raises(e.Paused, match="paused until"):
+        e.run(object())
+    assert calls == [], "a held run must not read a document either"
+
+
+def test_a_hold_whose_date_has_passed_is_no_hold(monkeypatch):
+    monkeypatch.setenv("MT_LLM_PAUSED_UNTIL", "2000-01-01 00:00")
+    assert e.paused_until() is None
 
 
 def _run_fixture(monkeypatch, extract, n_docs):
