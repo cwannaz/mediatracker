@@ -36,7 +36,7 @@ from . import db, entities, fetch, sources
 log = logging.getLogger(__name__)
 
 PROJECT_ID = "mediatracker"          # must equal the relay name
-REVISION = "2026-09-27.1"            # bump on every manifest change
+REVISION = "2026-09-27.2"            # bump on every manifest change
 
 # How often the snapshot thread re-reads Postgres. The cheap half is per-minute
 # because it carries the crawl's freshness; the counts move slowly and cost a
@@ -507,8 +507,11 @@ def status(snap: Snapshot, live: dict) -> dict:
         when = time.strftime("%a %d %b %H:%M", time.localtime(until))
         checks.append({"id": "llm-hold", "label": "Claude-backed work",
                        "level": "info", "detail": f"held until {when}"})
-        hold_text = (f"Analysis that calls Claude is **held until {when}**. "
-                     "The web app, the search index and the API are unaffected.")
+        hold_text = (f"Analysis that calls Claude is **held until {when}**, so "
+                     "nothing is drawn from the subscription: no entity "
+                     "extraction, and the profile buttons will refuse. The "
+                     "crawl, the web app, the search index and the API are "
+                     "unaffected.")
     else:
         checks.append({"id": "llm-hold", "label": "Claude-backed work",
                        "level": "ok",

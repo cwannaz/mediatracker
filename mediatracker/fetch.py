@@ -57,17 +57,20 @@ class FetchError(RuntimeError):
 # --------------------------------------------------------------------------- #
 # A dated hold on fetching
 # --------------------------------------------------------------------------- #
-# 2026-09-27. Cedric: *"Put your fetchers on hold for a week please, we are
-# getting low on usage left."* Everything that goes out to a newspaper or to an
-# archive stops until the date below and then resumes by itself -- the crawl's
-# schedule, a scan asked for by hand, and the archive backfill legs. Reading the
-# corpus, the web app, the search index and the API are untouched: they cost
-# nothing outside this machine.
+# A date here stops everything that goes out to a newspaper or to an archive --
+# the crawl's schedule, a scan asked for by hand, the archive backfill legs --
+# until it passes, and then they resume by themselves. Reading the corpus, the
+# web app, the search index and the API are never affected: they cost nothing
+# outside this machine.
 #
-# Set MT_FETCH_PAUSED_UNTIL to another "YYYY-MM-DD HH:MM" to move it, or to an
-# empty string to lift it. The hold lifting needs no restart: each fetcher
-# tests it when it is about to go out.
-PAUSED_UNTIL = "2026-10-04 08:00"
+# Empty means no hold. Set MT_FETCH_PAUSED_UNTIL to a "YYYY-MM-DD HH:MM" to
+# impose one without editing code. Either way each fetcher tests it when it is
+# about to go out, so imposing or lifting a hold needs no restart.
+#
+# 2026-09-27: held for a week at Cedric's request, then lifted the same day --
+# what he needed to spare was the Claude subscription, which fetching does not
+# touch (see entities.PAUSED_UNTIL). The machinery stays, tested and ready.
+PAUSED_UNTIL = ""
 # How long a long-running backfill leg waits for the hold to end before it
 # exits and lets its supervisor relaunch it. Long enough that the run cannot be
 # mistaken for "nothing left to fetch" and retired (supervisor4.sh, MIN_RUN).

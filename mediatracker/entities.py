@@ -123,7 +123,7 @@ WEEK_CEILING = 0.40
 # "YYYY-MM-DD HH:MM" to move it, or to an empty string to lift it. Only work
 # that CALLS Claude is affected: the crawl, the body backfill and the web app
 # are untouched.
-PAUSED_UNTIL = "2026-09-24 22:00"
+PAUSED_UNTIL = "2026-10-04 08:00"
 # Called again this long after the reported reset: the reset is given to the
 # minute, and a call made a few seconds early would read the old window.
 RESET_GRACE_S = 120
@@ -943,7 +943,13 @@ def main(argv=None) -> int:
                                  quota_ceiling=a.quota_ceiling,
                                  week_ceiling=a.week_ceiling,
                                  progress=show), indent=1))
-        except (NotLoggedIn, Paused) as exc:
+        except Paused as exc:
+            # 0, not an error: this runs as mt-journals-entities.service, and a
+            # hold Cedric imposed must not leave a failed unit on the fleet
+            # dashboard. The printed line says nothing was spent.
+            print(f"not running: {exc}")
+            return 0
+        except NotLoggedIn as exc:
             print(f"cannot run: {exc}")
             return 2
     return 0

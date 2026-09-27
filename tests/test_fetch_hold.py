@@ -34,9 +34,10 @@ def test_the_reason_names_the_date_and_how_to_change_it(monkeypatch):
     assert "01 Jan 08:00" in reason and "MT_FETCH_PAUSED_UNTIL" in reason
 
 
-def test_the_shipped_default_is_the_week_cedric_asked_for():
-    # The hold lives in the code, so it survives a restart and lifts itself.
-    assert fetch.PAUSED_UNTIL == "2026-10-04 08:00"
+def test_no_hold_is_shipped_by_default():
+    # A hold is a deliberate act. When one is in force it lives in the code
+    # rather than in a shell, so it survives a restart and lifts itself.
+    assert fetch.PAUSED_UNTIL == ""
 
 
 # -- the crawl ------------------------------------------------------------- #
