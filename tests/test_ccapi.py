@@ -271,3 +271,39 @@ def test_the_snapshot_is_called_stale_before_it_is_believed():
     snap = _snapshot()
     snap.cheap_at = time.time() - ccapi.SNAPSHOT_STALE_S - 60
     assert _checks(ccapi.status(snap, _live()))["db"]["level"] == "warn"
+
+
+# -- a deliberate hold is not a failure ------------------------------------ #
+
+def test_a_fetch_hold_keeps_the_crawl_from_going_red(monkeypatch):
+    """A week of deliberate quiet must not read as a week of breakage."""
+    stale = ccapi._iso(__import__("datetime").datetime.now().astimezone()
+                       - __import__("datetime").timedelta(days=5))
+    snap = _snapshot(last_done={s: {"at": stale, "status": "done",
+                                    "articles_seen": 2, "comment_snapshots": 0}
+                                for s in JOURNALS})
+    monkeypatch.setenv("MT_FETCH_PAUSED_UNTIL", "2099-01-01 08:00")
+    out = ccapi.status(snap, _live())
+    assert _checks(out)["crawl-fresh"]["level"] == "info"
+    assert out["health"]["level"] == "info"
+    assert "on hold until" in out["health"]["summary"]
+    assert all(i["level"] == "info" for i in out["widgets"]["crawl"]["items"])
+    # Without the hold the same figures are an error, or the check says nothing.
+    monkeypatch.setenv("MT_FETCH_PAUSED_UNTIL", "")
+    assert _checks(ccapi.status(snap, _live()))["crawl-fresh"]["level"] == "error"
+
+
+def test_a_fetch_hold_has_a_check_and_disables_the_button(monkeypatch):
+    monkeypatch.setenv("MT_FETCH_PAUSED_UNTIL", "2099-01-01 08:00")
+    out = ccapi.status(_snapshot(), _live())
+    assert _checks(out)["fetch-hold"]["level"] == "info"
+    state = out["actions_state"]["trigger-scan"]
+    assert state["enabled"] is False and "on hold until" in state["reason"]
+    assert "Nothing goes out" in out["widgets"]["hold"]["markdown"]
+
+
+def test_both_holds_are_reported_together(monkeypatch):
+    monkeypatch.setenv("MT_FETCH_PAUSED_UNTIL", "2099-01-01 08:00")
+    monkeypatch.setenv("MT_LLM_PAUSED_UNTIL", "2099-02-01 08:00")
+    text = ccapi.status(_snapshot(), _live())["widgets"]["hold"]["markdown"]
+    assert "Fetching is" in text and "calls Claude is" in text

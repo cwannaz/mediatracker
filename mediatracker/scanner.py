@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from . import db, ids, sources
+from . import db, fetch, ids, sources
 from .pipeline import IngestStats, Pipeline
 
 log = logging.getLogger(__name__)
@@ -102,9 +102,16 @@ class ScanEngine:
             self._tasks.append(asyncio.create_task(self._schedule_loop(slug, i)))
 
     def enqueue(self, slug: str, trigger: str) -> int | None:
-        """Queue a scan. Returns the scan_run id (None when degraded)."""
+        """Queue a scan. Returns the scan_run id (None when degraded).
+
+        Refuses while fetching is on hold, rather than queueing a scan that
+        would go out anyway: this is the path every manual trigger takes --
+        the web app's Sources card, the API's button -- and each of them
+        shows what it is told.
+        """
         if sources.get(slug) is None:
             raise ValueError(f"unknown journal {slug!r}")
+        fetch.check_not_paused(f"a {trigger} scan of {slug}")
         run_id = None
         if self.conn is not None:
             run_id = db.create_scan_run(self.conn, journal_id=ids.journal_id(slug),
@@ -178,7 +185,20 @@ class ScanEngine:
     async def _schedule_loop(self, slug: str, idx: int) -> None:
         # Small startup stagger so schedulers don't all wake at once.
         await asyncio.sleep(self.cfg.startup_stagger_seconds * (idx + 1))
+        held_logged = False
         while True:
+            # A dated hold outranks the schedule: a slot that falls inside it
+            # is skipped, not queued for later, because the next one is along
+            # in a few hours anyway. Logged once per hold so a week of it does
+            # not fill the journal.
+            reason = fetch.hold_reason(f"the {slug} crawl")
+            if reason:
+                if not held_logged:
+                    log.info("[%s] %s", slug, reason)
+                    held_logged = True
+                await asyncio.sleep(300)
+                continue
+            held_logged = False
             sched = self.schedule_of(slug)
             if not sched.get("enabled", True):
                 await asyncio.sleep(300)  # re-check enable flag periodically

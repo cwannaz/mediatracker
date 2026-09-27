@@ -3,11 +3,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _no_llm_hold(monkeypatch):
-    """Lift the dated hold on Claude-backed work.
+def _no_holds(monkeypatch):
+    """Lift both dated holds: Claude-backed work, and fetching.
 
-    `entities.PAUSED_UNTIL` holds real runs until a date Cedric set. Tests
-    exercise the code, not the calendar, so they run with the hold lifted --
-    and the two tests that check the hold set it themselves.
+    `entities.PAUSED_UNTIL` and `fetch.PAUSED_UNTIL` hold real runs until dates
+    Cedric set. Tests exercise the code, not the calendar, so they run with the
+    holds lifted -- and the tests that check a hold set it themselves.
     """
     monkeypatch.setenv("MT_LLM_PAUSED_UNTIL", "")
+    monkeypatch.setenv("MT_FETCH_PAUSED_UNTIL", "")

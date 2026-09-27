@@ -18,6 +18,7 @@ import gzip
 import http.cookiejar
 import json
 import logging
+import os
 import threading
 import time
 import urllib.error
@@ -51,6 +52,78 @@ class Response:
 
 class FetchError(RuntimeError):
     pass
+
+
+# --------------------------------------------------------------------------- #
+# A dated hold on fetching
+# --------------------------------------------------------------------------- #
+# 2026-09-27. Cedric: *"Put your fetchers on hold for a week please, we are
+# getting low on usage left."* Everything that goes out to a newspaper or to an
+# archive stops until the date below and then resumes by itself -- the crawl's
+# schedule, a scan asked for by hand, and the archive backfill legs. Reading the
+# corpus, the web app, the search index and the API are untouched: they cost
+# nothing outside this machine.
+#
+# Set MT_FETCH_PAUSED_UNTIL to another "YYYY-MM-DD HH:MM" to move it, or to an
+# empty string to lift it. The hold lifting needs no restart: each fetcher
+# tests it when it is about to go out.
+PAUSED_UNTIL = "2026-10-04 08:00"
+# How long a long-running backfill leg waits for the hold to end before it
+# exits and lets its supervisor relaunch it. Long enough that the run cannot be
+# mistaken for "nothing left to fetch" and retired (supervisor4.sh, MIN_RUN).
+HOLD_WAIT_CAP_S = 6 * 3600
+
+
+class Paused(RuntimeError):
+    """Fetching is on hold until a date Cedric set."""
+
+
+def paused_until(now: float | None = None) -> float | None:
+    """When the hold on fetching ends, or None if there is no hold in force."""
+    raw = os.environ.get("MT_FETCH_PAUSED_UNTIL", PAUSED_UNTIL)
+    if not (raw or "").strip():
+        return None
+    when = time.mktime(time.strptime(raw.strip(), "%Y-%m-%d %H:%M"))
+    return when if when > (now if now is not None else time.time()) else None
+
+
+def hold_reason(what: str = "fetching") -> str | None:
+    """One sentence naming the hold, or None. For logs and for the dashboard."""
+    until = paused_until()
+    if until is None:
+        return None
+    return (f"{what} is on hold until "
+            f"{time.strftime('%a %d %b %H:%M', time.localtime(until))} "
+            f"(MT_FETCH_PAUSED_UNTIL changes it)")
+
+
+def check_not_paused(what: str = "this fetch") -> None:
+    """Raise while the hold is in force. Called BEFORE anything goes out."""
+    reason = hold_reason(what)
+    if reason:
+        raise Paused(reason)
+
+
+def wait_out_hold(cap_s: float = HOLD_WAIT_CAP_S, *, sleep=time.sleep) -> bool:
+    """Wait for the hold to lift, up to `cap_s`. True if it is still in force.
+
+    A leg that EXITS on the hold would be read by its supervisor as a leg with
+    nothing left to fetch, and retired for good. So it waits instead, and if
+    the hold outlasts the cap it exits after a run far too long to look like a
+    quick finish.
+    """
+    waited = 0.0
+    while True:
+        until = paused_until()
+        if until is None:
+            return False
+        if waited >= cap_s:
+            return True
+        # Counted, not clocked: what matters is how long this leg has waited,
+        # and a step short enough that a lifted hold is noticed in minutes.
+        step = min(300.0, cap_s - waited, max(1.0, until - time.time()))
+        sleep(step)
+        waited += step
 
 
 class Fetcher:

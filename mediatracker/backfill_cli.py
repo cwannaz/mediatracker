@@ -20,7 +20,7 @@ import logging
 import sys
 import time
 
-from . import backfill, db
+from . import backfill, db, fetch
 from .config import load_config
 from .wayback import GaveUp, WaybackClient, stats as client_stats
 
@@ -114,6 +114,14 @@ def main(argv=None) -> int:
 
     if args.status:
         return status(conn)
+
+    # A leg under supervisor4.sh waits the hold out instead of exiting: an exit
+    # inside MIN_RUN with no traceback reads as "nothing left to fetch" and
+    # retires the leg for good. --status and --survey are counted above and
+    # below without asking the archive for anything new.
+    if not args.survey and fetch.wait_out_hold():
+        log.info("%s; leaving the legs to be relaunched", fetch.hold_reason("the archive backfill"))
+        return 0
 
     client = WaybackClient(min_delay=args.delay)
 

@@ -31,12 +31,12 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
-from . import db, entities, sources
+from . import db, entities, fetch, sources
 
 log = logging.getLogger(__name__)
 
 PROJECT_ID = "mediatracker"          # must equal the relay name
-REVISION = "2026-09-26.1"            # bump on every manifest change
+REVISION = "2026-09-27.1"            # bump on every manifest change
 
 # How often the snapshot thread re-reads Postgres. The cheap half is per-minute
 # because it carries the crawl's freshness; the counts move slowly and cost a
@@ -341,8 +341,9 @@ def manifest(*, journals=()) -> dict:
              "placement": ["tab:corpus"]},
             {"id": "analysis", "type": "kv", "title": "What has been read",
              "placement": ["tab:analysis"]},
-            {"id": "hold", "type": "text", "title": "Claude-backed work",
-             "placement": ["tab:analysis"]},
+            {"id": "hold", "type": "text", "title": "Holds",
+             "placement": ["tab:analysis"],
+             "help": "Work Cedric has deliberately stopped, and until when."},
         ],
         "tab": {"sections": [
             {"id": "crawl", "title": "Crawl"},
@@ -367,8 +368,14 @@ def manifest(*, journals=()) -> dict:
 # status
 # --------------------------------------------------------------------------- #
 
-def _crawl_check(data: dict, live: dict) -> tuple[dict, list]:
-    """One line per paper, and the check that reads the worst of them."""
+def _crawl_check(data: dict, live: dict, *, held: str | None = None) -> tuple[dict, list]:
+    """One line per paper, and the check that reads the worst of them.
+
+    Under a dated hold the ages still grow but they stop meaning anything: a
+    week of deliberate quiet must not read as a week of failure, or the one
+    signal this project contributes to the dashboard is worthless when it
+    matters. The papers are still listed, with the hold as their detail.
+    """
     last_done = data.get("last_done") or {}
     items, levels = [], []
     for slug in live.get("journals") or sorted(last_done):
@@ -391,10 +398,15 @@ def _crawl_check(data: dict, live: dict) -> tuple[dict, list]:
     worst = _worst(levels)
     oldest = max((_age_s((last_done.get(i["label"]) or {}).get("at")) or 0)
                  for i in items) if items else None
+    detail = ("no paper configured" if not items else
+              f"oldest completed scan {_human_age(oldest)}")
+    if held:
+        for item in items:
+            item["level"] = "info"
+            item["detail"] = f"on hold; last scan {item['detail']}"
+        worst, detail = "info", f"{held}; last scan {_human_age(oldest)}"
     check = {"id": "crawl-fresh", "label": "Papers scanned recently",
-             "level": worst,
-             "detail": ("no paper configured" if not items else
-                        f"oldest completed scan {_human_age(oldest)}")}
+             "level": worst, "detail": detail}
     return {"items": items}, [check]
 
 
@@ -455,8 +467,12 @@ def status(snap: Snapshot, live: dict) -> dict:
         checks.append({"id": "db", "label": "Postgres reachable", "level": "ok",
                        "detail": f"figures read {_human_age(age)}"})
 
-    crawl_widget, crawl_checks = _crawl_check(data, live)
+    held = fetch.hold_reason("fetching")
+    crawl_widget, crawl_checks = _crawl_check(data, live, held=held)
     checks += crawl_checks
+    if held:
+        checks.append({"id": "fetch-hold", "label": "Fetching",
+                       "level": "info", "detail": held})
 
     # -- the scanner itself -------------------------------------------- #
     current, queued = live.get("current"), live.get("queue") or 0
@@ -475,6 +491,9 @@ def status(snap: Snapshot, live: dict) -> dict:
                        "detail": f"scanning {current.get('slug')} "
                                  f"({current.get('current') or 0}"
                                  f"/{current.get('total') or '?'}), queue {queued}"})
+    elif held:
+        checks.append({"id": "scan-queue", "label": "Scanner", "level": "info",
+                       "detail": "idle: nothing will be fetched until the hold ends"})
     else:
         checks.append({"id": "scan-queue", "label": "Scanner", "level": "ok",
                        "detail": "idle"})
@@ -489,15 +508,15 @@ def status(snap: Snapshot, live: dict) -> dict:
         checks.append({"id": "llm-hold", "label": "Claude-backed work",
                        "level": "info", "detail": f"held until {when}"})
         hold_text = (f"Analysis that calls Claude is **held until {when}**. "
-                     "The crawl, the archive backfill and the web app are "
-                     "unaffected.")
+                     "The web app, the search index and the API are unaffected.")
     else:
         checks.append({"id": "llm-hold", "label": "Claude-backed work",
                        "level": "ok",
                        "detail": "free to run, under 50% of a five-hour window "
                                  "and 40% of a week"})
-        hold_text = ("Free to run. The account is never taken past **50%** of a "
-                     "five-hour window or **40%** of a week.")
+        hold_text = ("Claude-backed analysis is free to run. The account is "
+                     "never taken past **50%** of a five-hour window or "
+                     "**40%** of a week.")
 
     # -- widgets -------------------------------------------------------- #
     docs = data.get("documents") or {}
@@ -555,7 +574,11 @@ def status(snap: Snapshot, live: dict) -> dict:
             {"label": "Personas", "value": data.get("personas", 0),
              "format": "integer"},
         ]},
-        "hold": {"markdown": hold_text},
+        "hold": {"markdown": (f"Fetching is **{held.split(' is ', 1)[1]}**. "
+                              "Nothing goes out to a newspaper or an archive "
+                              f"until then.\n\n{hold_text}")
+                 if held else hold_text,
+                 "level": "info" if held else "ok"},
     }
 
     level = _worst([c["level"] for c in checks])
@@ -563,11 +586,13 @@ def status(snap: Snapshot, live: dict) -> dict:
         "schema": "cc.status/1",
         "generated_at": _now_iso(),
         "manifest_revision": REVISION,
-        "health": {"level": level, "summary": _summary(level, checks, data, live)},
+        "health": {"level": level,
+                   "summary": _summary(level, checks, data, live, held=held)},
         "checks": checks,
         "widgets": widgets,
         "actions_state": {
-            "trigger-scan": ({"enabled": False, "reason": "no database"}
+            "trigger-scan": ({"enabled": False, "reason": held} if held else
+                             {"enabled": False, "reason": "no database"}
                              if live.get("degraded") else
                              {"enabled": False,
                               "reason": f"{queued} scans already queued"}
@@ -575,13 +600,20 @@ def status(snap: Snapshot, live: dict) -> dict:
     }
 
 
-def _summary(level: str, checks: list[dict], data: dict, live: dict) -> str:
+def _summary(level: str, checks: list[dict], data: dict, live: dict,
+             *, held: str | None = None) -> str:
     """One line, derived from the checks rather than written beside them.
 
     The contract asks that the summary never disagrees with the checks, which
     is only reliable if it is computed from them.
     """
     bad = [c for c in checks if c["level"] in ("warn", "error")]
+    if held and not bad:
+        cov = data.get("coverage") or {}
+        pct = cov.get("pct")
+        return (held[0].upper() + held[1:] +
+                (f"; {pct:.2f}% of articles read" if isinstance(pct, (int, float))
+                 else "") + ".")
     if bad:
         return "; ".join(f"{c['label'].lower()}: {c.get('detail') or c['level']}"
                          for c in bad[:3])

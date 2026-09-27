@@ -287,6 +287,8 @@ async def run(*, slug: str = "lematin", years: tuple[int, ...] = YEARS_WITH_COMM
 def main(argv=None) -> int:
     import argparse
     import asyncio
+
+    from . import fetch
     p = argparse.ArgumentParser(prog="mediatracker.sitemap_backfill")
     p.add_argument("--journal", default="lematin")
     p.add_argument("--year", type=int, action="append", default=None)
@@ -299,6 +301,12 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     logging.basicConfig(level=getattr(logging, a.log_level.upper(), logging.INFO),
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    # Same as the archive legs: wait, do not exit, or supervisor4.sh retires
+    # this leg as finished.
+    if fetch.wait_out_hold():
+        log.info("%s; leaving the legs to be relaunched",
+                 fetch.hold_reason("the sitemap backfill"))
+        return 0
     years = tuple(a.year) if a.year else YEARS_WITH_COMMENTS
     out = asyncio.run(run(slug=a.journal, years=years, delay=a.delay,
                           max_hours=a.max_hours, limit=a.limit))

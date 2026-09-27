@@ -27,7 +27,7 @@ import time
 import urllib.error
 from dataclasses import dataclass
 
-from . import ids
+from . import fetch, ids
 from .archive_body import extract_body
 from .archive_parse import looks_like_newsnetz
 from .backfill import article_url_of
@@ -266,6 +266,14 @@ def main(argv=None) -> int:
             """, (MARKER,))
             for slug, outcome, n in cur.fetchall():
                 print(f"  {slug:10s} {str(outcome or '(not attempted)'):22s} {n:>8,}")
+        return 0
+
+    # Exit 0, not an error code: this also runs as mt-journals-bodies.service,
+    # and a deliberate hold must not leave a failed unit on the fleet
+    # dashboard. The printed line is what tells a person nothing was fetched.
+    reason = fetch.hold_reason("the archive body backfill")
+    if reason:
+        print(reason)
         return 0
 
     client = WaybackClient(min_delay=a.delay)
