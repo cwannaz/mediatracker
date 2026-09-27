@@ -33,7 +33,10 @@ Three things about the material, because they explain most of what you will see:
   and topics are being read out of the articles by a language model over a
   period of days. `entity_coverage` on every relevant response tells you what
   fraction has been read. **Do not present an entity count as final** while that
-  number is below 100.
+  number is below 100. `articles_read` and `articles_total` count the same
+  population -- articles that have a body -- so the ratio is meaningful;
+  `documents_read` is every document read, title-only stubs included, and is
+  therefore larger.
 
 ---
 
@@ -108,7 +111,8 @@ Liveness, corpus counts, and extraction progress:
             "journals": ["24heures", "lematin", "tdg"],
             "earliest": "2007-04-11", "latest": "2026-09-06"},
  "entity_coverage": {"articles_read": 46443, "articles_total": 180593,
-                     "pct": 25.72, "entities": 86029, "mentions": 358878}}
+                     "pct": 25.72, "documents_read": 51002,
+                     "entities": 86029, "mentions": 358878}}
 ```
 
 ---
@@ -303,3 +307,9 @@ discusses at length; text search reaches the whole corpus today.
 | `55031` | image blobs and thumbnails |
 | **`55032`** | **this API** |
 | `55080` | the web app |
+
+The same server also answers `/cc/v1`, which is **not part of this API**: it is
+the health report central-control's fleet dashboard polls, in central-control's
+own schema, and it refuses any caller that is not a process on this machine.
+Nothing else should read it — everything it reports about the corpus is
+available here, in a shape that is meant to last.

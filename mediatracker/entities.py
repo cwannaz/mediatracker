@@ -850,17 +850,29 @@ def coverage(conn) -> dict:
 
     An entity view over a partly-read corpus is not wrong, it is incomplete,
     and the difference has to be visible or every count reads as final.
+
+    The two figures come from ONE pass over the same population. They used to
+    come from two queries -- every document in entity_done over the articles
+    with a body -- and since title-only stubs were read too, the ratio drifted
+    up to 105.82% before anyone noticed. A ratio whose numerator and
+    denominator select different sets is wrong even when both are right.
+    `documents_read` keeps the older, wider number, named for what it is.
     """
     with conn.cursor() as cur:
+        cur.execute("""SELECT count(*), count(o.doc_ref)
+                       FROM search_doc d
+                       LEFT JOIN entity_done o
+                              ON o.doc_kind = d.kind AND o.doc_ref = d.ref
+                       WHERE d.kind = 'article'
+                         AND length(coalesce(d.body, '')) > 200""")
+        total, read = cur.fetchone()
         cur.execute("SELECT count(*) FROM entity_done")
-        read = cur.fetchone()[0]
-        cur.execute("""SELECT count(*) FROM search_doc
-                       WHERE kind = 'article' AND length(coalesce(body,'')) > 200""")
-        total = cur.fetchone()[0]
+        documents_read = cur.fetchone()[0]
         cur.execute("SELECT count(*), coalesce(sum(mentions), 0) FROM entity")
         n_ent, n_men = cur.fetchone()
     return {"articles_read": read, "articles_total": total,
             "pct": round(100 * read / max(1, total), 2),
+            "documents_read": documents_read,
             "entities": n_ent, "mentions": n_men}
 
 

@@ -36,7 +36,7 @@ import urllib.parse
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import db, entities, search
+from . import ccapi, db, entities, search
 
 log = logging.getLogger(__name__)
 
@@ -72,9 +72,16 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = f"MediaTrackerAPI/{VERSION}"
     protocol_version = "HTTP/1.1"
 
-    def __init__(self, *args, cfg=None, blob_base="", **kw):
+    def __init__(self, *args, cfg=None, blob_base="", snap=None, actions=None,
+                 view=None, **kw):
         self.cfg = cfg
         self.blob_base = blob_base
+        # central-control's view of the project: a snapshot thread, the live
+        # daemon state, and the buttons. All three are absent when the API is
+        # started outside the daemon, and /cc/v1 then answers 503.
+        self.snap = snap
+        self.actions = actions
+        self.view = view
         super().__init__(*args, **kw)
 
     # -- plumbing ------------------------------------------------------- #
@@ -95,7 +102,47 @@ class _Handler(BaseHTTPRequestHandler):
     def _fail(self, status, message, **extra):
         self._send({"ok": False, "error": message, **extra}, status)
 
+    def _send_cc(self, obj, status=200):
+        """A /cc/v1 reply: the same JSON, and pointedly no CORS header.
+
+        The rest of this service invites browsers in. central-control's half
+        must not: a page on any origin could otherwise read the project's
+        state, and a custom header is only a barrier while CORS is refused.
+        """
+        body = json.dumps(obj, ensure_ascii=False, default=str).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _cc_error(self, status, code, message):
+        self._send_cc({"error": {"code": code, "message": message}}, status)
+
+    def _loopback_only(self) -> bool:
+        """Whether this request really came from a process on this machine.
+
+        Three tests, because each alone is wrong: the peer address misses a
+        reverse proxy (every proxied client arrives from 127.0.0.1), the
+        forwarding headers miss a proxy that strips them, and the Host header
+        misses nothing but is trivially forged. Together they cover the two
+        ways /cc/v1 actually leaks -- a server on 0.0.0.0, and a Caddy in
+        front of it.
+        """
+        peer = (self.client_address or ("",))[0]
+        if peer not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return False
+        for header in ("X-Forwarded-For", "Forwarded", "X-Real-IP"):
+            if self.headers.get(header) is not None:
+                return False
+        port = self.server.server_address[1]
+        return (self.headers.get("Host") or "").strip() in (
+            f"127.0.0.1:{port}", f"localhost:{port}")
+
     def do_OPTIONS(self):  # noqa: N802
+        # No preflight for /cc/v1: it is not for browsers at all.
+        if self.path.startswith("/cc/"):
+            return self._cc_error(403, "loopback_only", "not available to browsers")
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "*")
@@ -113,6 +160,8 @@ class _Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
         multi = urllib.parse.parse_qs(parsed.query)
 
+        if parts[:1] == ["cc"]:
+            return self._cc_get(parts[1:])
         if not parts or parts[0] != "v1":
             return self._fail(404, "unknown path; the API lives under /v1/")
         route = parts[1:]
@@ -141,7 +190,53 @@ class _Handler(BaseHTTPRequestHandler):
                 pass
             return self._fail(500, str(exc))
 
+    def do_POST(self):  # noqa: N802
+        parts = [p for p in urllib.parse.urlparse(self.path).path.strip("/").split("/") if p]
+        if parts[:1] != ["cc"]:
+            return self._fail(405, "this API is read-only; nothing here takes a POST")
+        if not self._loopback_only():
+            return self._cc_error(403, "loopback_only",
+                                  "/cc/v1 answers processes on this machine only")
+        if parts[1:2] != ["v1"] or parts[2:3] != ["actions"] or len(parts) != 4:
+            return self._cc_error(404, "not_found", f"no such endpoint /{'/'.join(parts)}")
+        # The header is what stops a browser: it cannot be set cross-origin
+        # without the CORS this service refuses on /cc.
+        if self.headers.get("X-Central-Control") != "1":
+            return self._cc_error(403, "forbidden", "X-Central-Control: 1 required")
+        if self.actions is None:
+            return self._cc_error(503, "unavailable", "the daemon is not serving actions")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+            if not isinstance(body, dict):
+                raise ValueError("body must be a JSON object")
+        except (ValueError, json.JSONDecodeError) as exc:
+            return self._cc_error(400, "bad_param", str(exc))
+        try:
+            status, payload = self.actions.run(parts[3], body)
+        except Exception as exc:
+            log.exception("cc action failed")
+            return self._cc_error(500, "internal", str(exc))
+        return self._send_cc(payload, status)
+
     # -- endpoints ------------------------------------------------------ #
+
+    def _cc_get(self, rest: list) -> None:
+        """central-control's two endpoints, served without touching Postgres."""
+        if not self._loopback_only():
+            return self._cc_error(403, "loopback_only",
+                                  "/cc/v1 answers processes on this machine only")
+        if rest[:1] != ["v1"]:
+            return self._cc_error(404, "not_found", "the CC-API lives under /cc/v1")
+        route = rest[1:]
+        if route == ["manifest"]:
+            return self._send_cc(ccapi.manifest())
+        if route == ["status"]:
+            if self.snap is None or self.view is None:
+                return self._cc_error(503, "unavailable",
+                                      "the daemon is not reporting yet")
+            return self._send_cc(ccapi.status(self.snap, self.view.live()))
+        return self._cc_error(404, "not_found", f"no such endpoint /cc/{'/'.join(rest)}")
 
     def _index(self, conn) -> dict:
         """Self-description, so a consumer needs no out-of-band documentation."""
@@ -341,13 +436,27 @@ def _corpus(conn) -> dict:
             "latest": hi.isoformat() if hi else None}
 
 
-def start(cfg) -> ThreadingHTTPServer:
-    """Serve the API on cfg.port + 2, in a daemon thread."""
+def start(cfg, view=None) -> ThreadingHTTPServer:
+    """Serve the API on cfg.port + 2, in a daemon thread.
+
+    With a `view` onto the running daemon it also serves /cc/v1 for
+    central-control, and starts the thread that keeps that report's snapshot
+    of Postgres current. Without one (the API started on its own), /cc/v1
+    answers 503 and no extra thread runs.
+    """
     port = cfg.port + 2
     blob_base = f"http://{cfg.host}:{cfg.port + 1}"
-    handler = partial(_Handler, cfg=cfg, blob_base=blob_base)
+    snap = actions = None
+    if view is not None:
+        snap = ccapi.Snapshot()
+        actions = ccapi.Actions(view)
+        threading.Thread(target=ccapi.refresh_loop, args=(cfg, snap, threading.Event()),
+                         daemon=True, name="cc-snapshot").start()
+    handler = partial(_Handler, cfg=cfg, blob_base=blob_base, snap=snap,
+                      actions=actions, view=view)
     httpd = ThreadingHTTPServer((cfg.host, port), handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True, name="api").start()
-    log.info("read-only API on http://%s:%s/v1/", cfg.host, port)
+    log.info("read-only API on http://%s:%s/v1/%s", cfg.host, port,
+             " (+ /cc/v1 for central-control)" if view is not None else "")
     return httpd

@@ -18,7 +18,7 @@ from functools import partial
 
 import websockets
 
-from . import (alias_candidates, anagrams, api, blobserver, coverage, db, disclosures,
+from . import (alias_candidates, anagrams, api, blobserver, ccapi, coverage, db, disclosures,
                entities, handles, profiling, search, stance, thumbs,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
@@ -113,7 +113,11 @@ class Server:
                 # Read-only HTTP/JSON for other projects. Its own threads and
                 # its own connections, so a caller's expensive query cannot
                 # reach the event loop this daemon answers the web app on.
-                api.start(self.cfg)
+                # The view lets /cc/v1 report the scan engine's live state
+                # (queue, running scan, last result per paper) without a
+                # query, and lets central-control queue a scan.
+                api.start(self.cfg,
+                          view=ccapi.DaemonView(self, asyncio.get_running_loop()))
             except Exception as exc:
                 log.warning("API unavailable: %s", exc)
 
