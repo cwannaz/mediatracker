@@ -118,12 +118,16 @@ QUOTA_CEILING = 0.50
 # it while never once crossing the five-hour ceiling, so the week is a
 # ceiling of its own.
 WEEK_CEILING = 0.40
-# Claude-backed analysis is held until this local time, because the weekly
-# subscription is needed by other projects. Set MT_LLM_PAUSED_UNTIL to another
-# "YYYY-MM-DD HH:MM" to move it, or to an empty string to lift it. Only work
-# that CALLS Claude is affected: the crawl, the body backfill and the web app
-# are untouched.
-PAUSED_UNTIL = "2026-10-04 08:00"
+# A local "YYYY-MM-DD HH:MM" here holds everything that CALLS Claude -- entity
+# extraction and the profile buttons -- until it passes, and then the work is
+# free again without a restart. The crawl, the archive backfill and the web app
+# are never affected. Empty means no hold; MT_LLM_PAUSED_UNTIL overrides either
+# way, so a hold can be imposed or lifted without editing code.
+#
+# Held 2026-09-13 (quota experiment), 2026-09-19 -> 09-24 and 2026-09-27 ->
+# 10-04, each time because the weekly subscription was needed elsewhere; the
+# last was lifted early, on 2026-10-03, at Cedric's word.
+PAUSED_UNTIL = ""
 # Called again this long after the reported reset: the reset is given to the
 # minute, and a call made a few seconds early would read the old window.
 RESET_GRACE_S = 120
