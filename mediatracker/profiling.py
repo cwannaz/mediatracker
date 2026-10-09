@@ -35,7 +35,7 @@ from collections import Counter
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
-from . import db
+from . import db, mistakes
 from .config import load_config
 
 OUT_DIR = "/mnt/storage/Projects/MediaTracker/profiling"
@@ -364,6 +364,14 @@ def measure(comments: list[dict]) -> dict:
         "weekday_histogram": {str(d): dows.get(d, 0) for d in range(7)},
         "median_votes": sorted(votes)[len(votes) // 2] if votes else None,
         "top_words": [w for w, _ in freq.most_common(40) if len(w) > 4][:20],
+        # Specific grammatical mistakes, counted rather than inferred. The LLM
+        # pass names a subject's errors too, in `language.errors`, but it costs
+        # a call per subject; these come free with every refresh, so a shared
+        # mistake can be weighed against how often the community makes it.
+        # NOT added to proximity.FEATURES: that tuple defines the z-space every
+        # stored comparison was computed in, and widening it silently would
+        # move every score and the calibration with them.
+        "mistakes": mistakes.scan(" \n ".join(texts)),
     }
 
 

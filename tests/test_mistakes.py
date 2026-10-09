@@ -128,3 +128,42 @@ def test_scan_reports_counts_rates_and_the_hits_behind_them():
 def test_empty_text_is_not_an_error():
     assert mk.scan("")["participle_for_infinitive"] == 0
     assert mk.scan(None)["per_1000_words"] == 0.0
+
+
+# -- wired into the metrics pass ------------------------------------------ #
+
+def test_measure_reports_the_mistakes_it_can_count():
+    """Every refresh carries the counts, so they exist for anyone profiled."""
+    from datetime import datetime, timezone
+
+    from mediatracker import profiling as pf
+
+    comments = [
+        {"body_text": "bravo aux ultras d avoir boycotter ce match!",
+         "posted_at": datetime(2026, 9, 1, 10, tzinfo=timezone.utc)},
+        {"body_text": "les exportations n ont pas baissées, merci Trump",
+         "posted_at": datetime(2026, 9, 2, 11, tzinfo=timezone.utc)},
+        {"body_text": "il a mangé puis il est parti, c est cher la vie",
+         "posted_at": datetime(2026, 9, 3, 12, tzinfo=timezone.utc)},
+    ]
+    m = pf.measure(comments)["mistakes"]
+    assert m["participle_for_infinitive"] == 1
+    assert m["agreed_after_avoir"] == 1
+    assert m["per_1000_words"] > 0
+    assert "boycotter" in m["hits"]["participle_for_infinitive"][0]
+    # The correct third comment contributes nothing.
+    assert len(m["hits"]["agreed_after_avoir"]) == 1
+
+
+def test_the_proximity_space_is_not_widened_by_this():
+    """The new counts must not silently move every stored comparison.
+
+    `proximity.FEATURES` is the z-space every score and the live calibration
+    were computed in. Adding a measure to `measure()` is additive; adding one
+    HERE changes what every past number meant, so it is a deliberate act and
+    this test is what makes it deliberate.
+    """
+    from mediatracker import proximity as px
+
+    assert "mistakes" not in px.FEATURES
+    assert len(px.FEATURES) == 13
