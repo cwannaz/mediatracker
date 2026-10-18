@@ -143,3 +143,45 @@ def test_the_by_hand_body_backfill_refuses_and_says_why(monkeypatch, capsys):
     # 0, not an error: it also runs as a unit, and a hold is not a failure.
     assert body_backfill.main([]) == 0
     assert "on hold until" in capsys.readouterr().out
+
+
+# -- restart bookkeeping -------------------------------------------------- #
+
+def test_an_interrupted_run_is_closed_without_faking_a_finish():
+    """A reboot must not leave the table claiming a scan is still running.
+
+    And the closing must not invent a completion: `finished_at` is what
+    freshness is measured from, so a cut-off run has to stay out of it.
+    """
+    from mediatracker import db
+
+    seen = {}
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None):
+            seen["sql"] = " ".join(sql.split())
+        def fetchall(self):
+            return [(1812, "24heures", "running", None),
+                    (1813, "24heures", "queued", None)]
+
+    class _Conn:
+        def cursor(self): return _Cur()
+
+    out = db.close_interrupted_scan_runs(_Conn())
+    assert [o["id"] for o in out] == [1812, 1813]
+    assert [o["slug"] for o in out] == ["24heures", "24heures"]
+    sql = seen["sql"]
+    assert "status='interrupted'" in sql
+    assert "finished_at IS NULL" in sql          # only rows nothing finished
+    assert "'queued', 'running'" in sql
+    # The two lies this function exists to avoid.
+    assert "finished_at=now()" not in sql
+    assert "finished_at =" not in sql
+
+
+def test_closing_interrupted_runs_is_safe_without_a_database():
+    from mediatracker import db
+
+    assert db.close_interrupted_scan_runs(None) == []

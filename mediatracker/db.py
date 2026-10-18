@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS scan_run (
     journal_id        TEXT NOT NULL REFERENCES journal(id),
     slug              TEXT NOT NULL,
     trigger           TEXT NOT NULL,          -- 'manual' | 'scheduled'
-    status            TEXT NOT NULL,          -- 'queued'|'running'|'done'|'error'
+    status            TEXT NOT NULL,          -- 'queued'|'running'|'done'|'error'|'interrupted'
     requested_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at        TIMESTAMPTZ,
     finished_at       TIMESTAMPTZ,
@@ -782,6 +782,41 @@ def start_scan_run(conn, run_id: int) -> None:
         cur.execute(
             "UPDATE scan_run SET status='running', started_at=now() WHERE id=%s", (run_id,)
         )
+
+
+def close_interrupted_scan_runs(conn) -> list[dict]:
+    """Close the rows a previous daemon left open, and say which they were.
+
+    The scan queue lives in memory. When the process goes away -- a reboot, a
+    `systemctl restart`, a crash -- every row it had marked 'queued' or
+    'running' is orphaned: nothing will ever pick it up and nothing will ever
+    finish it, so the table keeps claiming a scan is in progress. Five
+    restarts had left 28 such rows before this existed, and the newest of them
+    is what `/cc/v1` reports as the last run for its paper.
+
+    Called once at startup, before the engine starts, which is the only moment
+    an unfinished row is unambiguously dead.
+
+    `finished_at` stays NULL on purpose. It is what freshness is measured
+    from, and a run that was cut off completed nothing: stamping it now would
+    make the crawl look fresher than it is, and backdating it would enter the
+    paper's history as a failure that never happened. The status is neither
+    'done' nor 'error' for the same reason -- 'interrupted' is what actually
+    happened, and it keeps these rows out of both counts.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE scan_run SET status='interrupted',
+                   note = coalesce(note || ' | ', '') || 'the daemon stopped before this scan finished'
+            WHERE finished_at IS NULL AND status IN ('queued', 'running')
+            RETURNING id, slug, status, requested_at
+            """
+        )
+        return [{"id": r[0], "slug": r[1], "was": r[2], "requested_at": r[3]}
+                for r in cur.fetchall()]
 
 
 def finish_scan_run(conn, run_id: int, *, status: str, stats: dict, note: str | None = None) -> None:

@@ -96,6 +96,11 @@ class Server:
             log.warning("running DEGRADED: Postgres unavailable, using JSONL store only")
         else:
             self._seed_journals()
+            orphans = db.close_interrupted_scan_runs(self.conn)
+            if orphans:
+                by_slug = ", ".join(sorted({o["slug"] for o in orphans}))
+                log.info("closed %d scan run(s) left open by an earlier "
+                         "process (%s)", len(orphans), by_slug)
 
         self.engine = ScanEngine(cfg=self.cfg, conn=self.conn, blobs=self.blobs,
                                  store=self.store, fetcher=self.fetcher, health=self.health)
