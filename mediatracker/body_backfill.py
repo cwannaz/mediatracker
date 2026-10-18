@@ -28,7 +28,8 @@ import urllib.error
 from dataclasses import dataclass
 
 from . import fetch, ids
-from .archive_body import extract_body
+from .archive_body import (extract_body, extract_body_portal,
+                           looks_like_portal)
 from .archive_parse import looks_like_newsnetz
 from .backfill import article_url_of
 from .wayback import GaveUp, WaybackClient
@@ -78,13 +79,16 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None,
     Ordered by capture so a stint works through one era at a time: the eras
     differ in yield, and mixing them makes a run's progress unreadable.
 
-    `min_capture` skips captures older than a "YYYY" (or fuller) prefix. The
-    runtime gate already refuses the portal era, but only after paying for the
-    page: measured, Le Matin's pre-2012 captures are 63,852 of the backlog and
-    every one of them is refused. Fetching them to learn what the capture date
-    already says would cost 54 hours and 64,000 requests on a donated server.
-    The gate stays the authority on what is readable -- this only avoids asking
-    for what is known unreadable.
+    `min_capture` skips captures older than a "YYYY" (or fuller) prefix.
+
+    It was added when the portal era was unreadable: every pre-2012 Le Matin
+    capture -- 63,852 of the backlog -- was fetched, refused, and marked, so
+    the gate avoided paying for pages whose capture date already said no.
+    That is no longer why it exists. Those pages now have a reader, and the
+    gate is simply how a stint is pointed at one era at a time: pass
+    --min-capture 2012 for the Newsnetz material, or leave it off to work
+    through the portal years, which is 63,852 requests of about 54 hours at a
+    polite pace and so is a decision rather than a default.
 
     `retry_failed` re-opens rows a previous stint could not fetch, but only the
     ones worth re-asking: see RETRYABLE. Measured, 83% of the failures are 404
@@ -302,13 +306,26 @@ def run(conn, *, client: WaybackClient, journal: str | None = None,
         # tell that from an article, so the era is refused rather than guessed:
         # this predicate is True for all three Newsnetz papers and False for
         # the portal pages.
-        if not looks_like_newsnetz(page):
+        # Each era gets the reader written for it. The generic reader keeps
+        # the pre-2012 portal soup -- teasers and promos in bare <p>, which no
+        # furniture rule tells from prose -- so that era is read through its
+        # own template instead: one container holds the article's text and the
+        # other stories sit outside it, so the soup is never reached rather
+        # than filtered. Validated on 24 captures across 2008-2011: 24 bodies,
+        # zero teasers, mean 2,100 characters.
+        if looks_like_newsnetz(page):
+            body = extract_body(page)
+        elif looks_like_portal(page):
+            body = extract_body_portal(page)
+        else:
+            # The marker is kept as it was spelt when it meant only this:
+            # neither template recognised. Renaming it now would give one
+            # outcome two names across the 1,416 rows already carrying it.
             st.wrong_era += 1
             _mark(conn, snap_id, "not_newsnetz")
             conn.commit()
             continue
 
-        body = extract_body(page)
         if not body:
             st.no_body += 1
             _mark(conn, snap_id, "no_body")

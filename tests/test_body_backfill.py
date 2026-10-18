@@ -335,3 +335,38 @@ def test_no_control_capture_is_survivable():
         def cursor(self): return _Cur()
 
     assert bb.control_capture(_Conn()) is None
+
+
+# -- each era read by its own reader -------------------------------------- #
+
+def test_a_portal_era_page_is_read_instead_of_refused(monkeypatch):
+    """Before this, every pre-2012 Le Matin capture was marked not_newsnetz.
+
+    63,852 of them, which is why the min-capture gate existed at all.
+    """
+    from test_archive_body_portal import LEAD, _drupal
+
+    conn = FakeConn()
+    monkeypatch.setattr(bb, "candidates", lambda c, **k: [row()])
+    client = FakeClient({"20150101000000": _drupal()})
+    out = bb.run(conn, client=client)
+    assert out["bodies"] == 1 and out["wrong_era"] == 0
+    stored = [p for _, p in conn.sql if p and any(LEAD[:40] in str(x) for x in p)]
+    assert stored, "the portal body was not written"
+
+
+def test_a_page_of_neither_era_is_still_refused(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(bb, "candidates", lambda c, **k: [row()])
+    client = FakeClient({"20150101000000":
+                         "<html><body><p>" + "x" * 900 + "</p></body></html>"})
+    out = bb.run(conn, client=client)
+    assert out["wrong_era"] == 1 and out["bodies"] == 0
+
+
+def test_the_newsnetz_reader_still_owns_the_newsnetz_era(monkeypatch):
+    """The portal reader must not take pages that already worked."""
+    conn = FakeConn()
+    monkeypatch.setattr(bb, "candidates", lambda c, **k: [row()])
+    client = FakeClient({"20150101000000": ARTICLE})
+    assert bb.run(conn, client=client)["bodies"] == 1
