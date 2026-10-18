@@ -124,6 +124,32 @@ def candidates(conn, *, journal: str | None = None, limit: int | None = None,
         return cur.fetchall()
 
 
+def fetch_url_of(captured_url: str | None, canonical: str) -> str:
+    """The url to ask the archive for: the article's own, never the thread view.
+
+    Folding "?comments=1" and "/print.html" onto the article url is right, and
+    measuring it is the only way to know. Where both views were captured, the
+    article view yields 935 / 2,581 / 2,503 characters of prose and the
+    comment view of the same capture yields 501 / 910 / 0. Where only the
+    comment view was captured, it carries the article's LEAD and nothing else
+    -- one paragraph of 117 to 175 characters, padded past the 400-character
+    floor by poll questions, job adverts and sponsored blurbs that the
+    furniture filter does not catch in that layout. Six of six sampled rows
+    looked like this.
+
+    So there is no fallback here. Asking the comment view would spend a
+    request on a donated server to store a lead wrapped in advertising, which
+    is the same trade the pre-2012 portal era is already refused for.
+
+    The cost of that is 55 of the 2,267 outstanding rows, whose only capture
+    is a comment view: the folded url names a record the archive does not
+    hold, it answers 503, and they are marked unfetchable and stepped over.
+    What must NOT happen is twelve of them at the head of the queue ending the
+    stint, which is what the control capture in run() is for.
+    """
+    return article_url_of(captured_url or canonical)
+
+
 def _mark(conn, snap_id: int, outcome: str) -> None:
     with conn.cursor() as cur:
         cur.execute("""
@@ -160,6 +186,60 @@ def store_body(conn, *, snap_id: int, article_id: str, body: str,
     return True
 
 
+def control_capture(conn, *, journal: str | None = None) -> tuple[str, str] | None:
+    """A capture this backfill has already read: proof of what the archive can do.
+
+    Used only to decide whether a run of failures is the archive's or the
+    rows'. Any successfully read row will do, so the newest is taken -- it is
+    the one most likely to still be served from a warm store.
+    """
+    sql = """
+        SELECT s.raw_meta->>'capture', s.raw_meta->>'captured_url', a.canonical_url
+        FROM article_snapshot s
+        JOIN article a ON a.id = s.article_id
+        JOIN journal j ON j.id = a.journal_id
+        WHERE s.raw_meta->>'body_backfill' = 'ok'
+          AND s.raw_meta->>'capture' IS NOT NULL
+    """
+    params: dict = {}
+    if journal:
+        sql += " AND j.slug = %(journal)s"
+        params["journal"] = journal
+    sql += " ORDER BY s.id DESC LIMIT 1"
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+    if not row:
+        return None
+    capture, captured_url, canonical = row
+    return capture, fetch_url_of(captured_url, canonical)
+
+
+def _archive_answers(client: WaybackClient, control: tuple[str, str]) -> bool:
+    """Can the archive still serve a capture we have read before?
+
+    A success here also resets the client's consecutive-failure counter, which
+    is what lets the run carry on.
+    """
+    capture, url = control
+    try:
+        page = client.snapshot(capture, url)
+    except Exception as exc:
+        log.warning("control capture failed too (%s): the archive is unwell",
+                    type(exc).__name__)
+        return False
+    if len(page) <= 1000:
+        # An answer, but not the page we know that capture holds: treat a
+        # stub or an error body as the archive being unwell rather than as
+        # permission to carry on marking rows.
+        log.warning("control capture answered only %d chars: not proof of "
+                    "health", len(page))
+        return False
+    log.info("control capture answered %d chars: the archive is fine, so the "
+             "failures belong to the rows", len(page))
+    return True
+
+
 def run(conn, *, client: WaybackClient, journal: str | None = None,
         limit: int | None = None, max_hours: float | None = None,
         min_capture: str | None = None, retry_failed: bool = False,
@@ -171,18 +251,34 @@ def run(conn, *, client: WaybackClient, journal: str | None = None,
              len(rows), f" ({journal})" if journal else "")
     st = Stats()
     deadline = time.time() + max_hours * 3600 if max_hours else None
+    control = control_capture(conn, journal=journal)
 
     for snap_id, aid, slug, capture, captured_url, canonical, headline, ccount in rows:
         if deadline and time.time() > deadline:
             log.info("budget reached; progress recorded and resumable")
             raise OutOfTime(st.as_dict())
         st.seen += 1
-        plain = article_url_of(captured_url or canonical)
+        plain = fetch_url_of(captured_url, canonical)
         try:
             page = client.snapshot(capture, plain)
         except GaveUp:
-            # The client has decided the archive wants us to stop. Marking this
-            # row would lose an article to a bad night, so it stays unattempted.
+            # The client counts consecutive failures and cannot tell "the
+            # archive is unwell" from "these twelve rows are unfetchable" --
+            # both arrive as a 5xx. So ask it something we know it can answer:
+            # a capture this backfill has already read. If that comes back,
+            # the archive is fine and the failures belong to the rows, which
+            # are then marked and stepped over instead of ending the stint.
+            # Without this, a dozen bad rows at the head of the queue abort a
+            # 2,267-row run after 12 attempts, which is what happened twice
+            # today.
+            if control and _archive_answers(client, control):
+                st.failed += 1
+                _mark(conn, snap_id, "failed:unfetchable")
+                conn.commit()
+                continue
+            # The control failed too: the archive really does want us to stop.
+            # Marking this row would lose an article to a bad night, so it
+            # stays unattempted.
             log.warning("archive asked us to stop after %d rows", st.seen)
             break
         except urllib.error.HTTPError as exc:

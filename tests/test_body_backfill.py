@@ -6,6 +6,8 @@ never write a body onto the wrong record.
 """
 from __future__ import annotations
 
+import urllib.error
+
 import pytest
 
 from mediatracker import body_backfill as bb
@@ -232,3 +234,104 @@ def test_a_non_http_failure_still_records_its_type(monkeypatch):
     out = bb.run(conn, client=FakeClient({}, raises={"20150101000000": TimeoutError("slow")}))
     assert out["failed"] == 1
     assert any("failed:TimeoutError" in str(p) for _, p in conn.sql if p)
+
+
+# -- asking the archive for the url it actually captured ------------------ #
+#
+# Two defects met here: the fetch url was folded (so the timestamp named a
+# record that does not exist, and the archive said 503), and twelve such rows
+# at the head of the queue ended a 2,267-row stint.
+
+def test_the_comment_view_is_never_asked_for():
+    """Measured, not assumed: that view carries the lead and adverts.
+
+    Where both views exist the article view gives 935 / 2,581 / 2,503
+    characters against 501 / 910 / 0; where only the comment view was
+    captured it gives one 117-175 character lead padded past the floor by
+    poll questions and job adverts. So the fold stands for fetching too, and
+    the 55 rows whose only capture is a comment view are marked unfetchable
+    rather than filled with advertising.
+    """
+    assert bb.fetch_url_of(
+        "http://www.tdg.ch/a/story/12245107?comments=1",
+        "http://www.tdg.ch/a/story/12245107",
+    ) == "http://www.tdg.ch/a/story/12245107"
+    assert bb.fetch_url_of("http://x.ch/a/print.html", "http://x.ch/a") \
+        == "http://x.ch/a"
+
+
+def test_without_a_captured_url_the_canonical_is_folded_too():
+    assert bb.fetch_url_of(None, "http://x.ch/a/story/99?comments=1") \
+        == "http://x.ch/a/story/99"
+
+
+def test_a_live_archive_means_the_failures_belong_to_the_rows():
+    """A dozen unfetchable rows must not end the stint."""
+    from mediatracker import body_backfill as bb
+
+    class _Client:
+        def __init__(self): self.asked = []
+        def snapshot(self, capture, url):
+            self.asked.append(url)
+            return "x" * 5000          # the control answers
+
+    client = _Client()
+    assert bb._archive_answers(client, ("20130101000000", "http://x.ch/a")) is True
+    assert client.asked == ["http://x.ch/a"]
+
+
+def test_a_failing_control_means_the_archive_really_is_unwell():
+    from mediatracker import body_backfill as bb
+    from mediatracker.wayback import GaveUp
+
+    class _Client:
+        def snapshot(self, capture, url):
+            raise GaveUp("still failing")
+
+    assert bb._archive_answers(_Client(), ("20130101000000", "http://x.ch/a")) is False
+
+
+def test_a_truncated_control_response_is_not_proof_of_health():
+    from mediatracker import body_backfill as bb
+
+    class _Client:
+        def snapshot(self, capture, url): return "tiny"
+
+    assert bb._archive_answers(_Client(), ("20130101000000", "http://x.ch/a")) is False
+
+
+def test_the_control_capture_is_one_we_have_already_read():
+    from mediatracker import body_backfill as bb
+
+    seen = {}
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None):
+            seen["sql"] = " ".join(sql.split()); seen["params"] = params
+        def fetchone(self):
+            return ("20150713062201", "http://x.ch/a?comments=1", "http://x.ch/a")
+
+    class _Conn:
+        def cursor(self): return _Cur()
+
+    # The url that read successfully, which is the one worth asking again.
+    assert bb.control_capture(_Conn()) == ("20150713062201", "http://x.ch/a")
+    assert "'ok'" in seen["sql"]            # a row that succeeded, not any row
+    assert "LIMIT 1" in seen["sql"]
+
+
+def test_no_control_capture_is_survivable():
+    from mediatracker import body_backfill as bb
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None): pass
+        def fetchone(self): return None
+
+    class _Conn:
+        def cursor(self): return _Cur()
+
+    assert bb.control_capture(_Conn()) is None
