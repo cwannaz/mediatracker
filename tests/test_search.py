@@ -240,3 +240,91 @@ def test_the_secret_search_path_stays_inside_this_project():
 def test_the_project_owned_location_is_searched_first():
     from mediatracker import db
     assert db._SECRET_SEARCH[0].name == "secrets"
+
+
+# -- re-indexing what the watermark has already passed -------------------- #
+#
+# refresh() walks article_snapshot.id forward and never looks back, which is
+# correct for new rows and blind to an existing row whose body is filled in
+# later. The body backfill does exactly that, by design. These tests pin the
+# way back.
+
+def test_the_ref_query_really_lost_its_id_window():
+    """A silent failure of that string replacement would re-index nothing.
+
+    If the window predicate survived, every call would ask for %(lo)s/%(hi)s
+    that nobody passes, or -- worse, had the shape been different -- match no
+    rows and report success.
+    """
+    from mediatracker import search as se
+
+    assert "%(refs)s" in se._ARTICLE_BY_REF
+    assert "%(lo)s" not in se._ARTICLE_BY_REF
+    assert "%(hi)s" not in se._ARTICLE_BY_REF
+    # Still one document per article, still the newest snapshot of it.
+    assert "DISTINCT ON (s.article_id)" in se._ARTICLE_BY_REF
+    assert "ORDER BY s.article_id, s.id DESC" in se._ARTICLE_BY_REF
+    # And it must overwrite, not skip: ON CONFLICT DO NOTHING would leave
+    # every stranded body exactly as stranded.
+    assert "ON CONFLICT" in se._ARTICLE_BY_REF
+    assert "body = EXCLUDED.body" in se._ARTICLE_BY_REF
+
+
+def test_divergence_is_measured_in_both_directions():
+    """A body rewritten SHORTER is as stale as one filled in."""
+    from mediatracker import search as se
+
+    seen = {}
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None):
+            seen["sql"] = " ".join(sql.split())
+            seen["params"] = params
+        def fetchall(self): return [("a1",), ("a2",)]
+
+    class _Conn:
+        def cursor(self): return _Cur()
+
+    assert se.diverged_article_refs(_Conn()) == ["a1", "a2"]
+    sql = seen["sql"]
+    assert "<>" in sql                      # not "the index is shorter"
+    assert "ORDER BY article_id, id DESC" in sql     # the newest snapshot
+    assert "kind = 'article'" in sql
+
+
+def test_reindexing_commits_each_batch_and_leaves_the_watermark_alone():
+    """The watermark describes the forward frontier; this does not move it."""
+    from mediatracker import search as se
+
+    calls, commits = [], []
+
+    class _Cur:
+        rowcount = 2
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None):
+            calls.append(params["refs"])
+
+    class _Conn:
+        def cursor(self): return _Cur()
+        def commit(self): commits.append(len(calls))
+
+    out = se.reindex_articles(_Conn(), ["a", "b", "c", "d", "e"], batch=2)
+    assert calls == [["a", "b"], ["c", "d"], ["e"]]
+    assert commits == [1, 2, 3]            # one commit per batch, resumable
+    assert out["refs"] == 5
+    assert out["docs"] == 6                # rowcount per batch, as reported
+    # Nothing here writes search_state.
+    assert not any("search_state" in str(c) for c in calls)
+
+
+def test_reindexing_nothing_is_not_an_error():
+    from mediatracker import search as se
+
+    class _Conn:
+        def cursor(self): raise AssertionError("should not query")
+        def commit(self): raise AssertionError("should not commit")
+
+    assert se.reindex_articles(_Conn(), [])["docs"] == 0

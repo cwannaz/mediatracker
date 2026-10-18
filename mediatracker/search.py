@@ -214,6 +214,82 @@ _SOURCE_MAX = {
 }
 
 
+# The same article document, chosen by ref instead of by id window. The
+# watermark in refresh() only ever moves forward over article_snapshot.id, so
+# a body written onto a row the watermark has already passed is never indexed
+# -- and the body backfill does exactly that, updating the snapshot in place
+# rather than inserting a second, empty document per article. Both decisions
+# are right on their own; together they stranded 54,277 recovered bodies,
+# invisible to search and therefore absent from the population entity
+# extraction reads. This is the way back to a row the watermark has passed.
+_ARTICLE_BY_REF = _REFRESH["article"].replace(
+    "WHERE s.id > %(lo)s AND s.id <= %(hi)s",
+    "WHERE s.article_id = ANY(%(refs)s)") + _CONFLICT
+assert "%(refs)s" in _ARTICLE_BY_REF, "the ref predicate did not replace the id window"
+
+
+def diverged_article_refs(conn, *, limit: int | None = None) -> list[str]:
+    """Articles whose newest snapshot holds text the index does not have.
+
+    The honest test is a length difference in either direction rather than
+    "the index is shorter": the index always takes an article's newest
+    snapshot, so agreeing lengths is the invariant, and a body that was
+    rewritten shorter is as stale as one that was filled in.
+
+    Measured on this corpus the divergence is 54,277 rows, every one of them
+    an index with less text than the snapshot -- which is the backfill's
+    signature, and the reason this function exists rather than a one-off
+    script: the same blindness applies to any later in-place edit.
+
+    Two of the backfill's 54,279 recovered bodies are NOT returned here. They
+    sit on a snapshot that is not their article's newest, and the index takes
+    the newest by design. Corpus-wide that rule costs 26 articles a body,
+    which is not worth changing what every indexed document means.
+    """
+    sql = """
+        WITH newest AS (
+            SELECT DISTINCT ON (article_id)
+                   article_id, length(coalesce(body_text, '')) AS blen
+            FROM article_snapshot ORDER BY article_id, id DESC)
+        SELECT n.article_id
+        FROM newest n
+        JOIN search_doc sd ON sd.kind = 'article' AND sd.ref = n.article_id
+        WHERE n.blen <> length(coalesce(sd.body, ''))
+        ORDER BY n.article_id
+    """
+    if limit:
+        sql += " LIMIT %(limit)s"
+    with conn.cursor() as cur:
+        cur.execute(sql, {"limit": limit})
+        return [r[0] for r in cur.fetchall()]
+
+
+def reindex_articles(conn, refs, *, batch: int = 2000, progress=None) -> dict:
+    """Re-index named articles, whatever the watermark has already passed.
+
+    Committed per batch and idempotent: ON CONFLICT rewrites the document in
+    place, so an interrupted run repeats at most one batch and a second run
+    over the same refs changes nothing. The watermark is deliberately left
+    alone -- it describes how far forward indexing has reached, and this does
+    not move that frontier.
+    """
+    refs = list(refs)
+    done = 0
+    started = time.time()
+    for i in range(0, len(refs), batch):
+        chunk = refs[i:i + batch]
+        with conn.cursor() as cur:
+            cur.execute(_ARTICLE_BY_REF, {"refs": chunk})
+            done += cur.rowcount
+        conn.commit()
+        if progress:
+            progress("article", min(i + batch, len(refs)), len(refs), done)
+    out = {"refs": len(refs), "docs": done,
+           "seconds": round(time.time() - started, 1)}
+    log.info("re-indexed %d article(s) by ref in %.1fs", done, out["seconds"])
+    return out
+
+
 def watermarks(conn) -> dict:
     """Where each kind's indexing has reached, against where it could reach."""
     out = {}
@@ -675,6 +751,11 @@ def main(argv=None) -> int:
     s.add_argument("--kind", action="append", default=None)
     s.add_argument("--limit", type=int, default=10)
     sub.add_parser("status", help="how far the index has got")
+    y = sub.add_parser("resync", help="re-index articles whose body the index missed")
+    y.add_argument("--batch", type=int, default=2000)
+    y.add_argument("--limit", type=int, default=None,
+                   help="only the first N diverged articles (for a trial run)")
+    y.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -689,6 +770,17 @@ def main(argv=None) -> int:
         out = refresh(conn, kinds=tuple(a.kind) if a.kind else KINDS,
                       batch=a.batch, max_batches=a.max_batches, progress=show)
         print(json.dumps(out, indent=1))
+    elif a.action == "resync":
+        refs = diverged_article_refs(conn, limit=a.limit)
+        print(f"{len(refs):,} article(s) whose indexed body differs from "
+              f"their newest snapshot", flush=True)
+        if a.dry_run or not refs:
+            return 0
+
+        def show(kind, at, total, n):
+            print(f"  {at:>8,} / {total:<8,} {n:>9,} re-indexed", flush=True)
+        print(json.dumps(reindex_articles(conn, refs, batch=a.batch,
+                                          progress=show), indent=1))
     elif a.action == "status":
         print(json.dumps(watermarks(conn), indent=1))
     else:
