@@ -1096,7 +1096,7 @@ def commenter_handles_signature(conn) -> str | None:
 
 
 def get_commenter(conn, nick: str, limit: int = 500) -> dict:
-    comments = comments_for_nicks(conn, [nick], limit=10 ** 9)
+    comments = comments_for_nicks(conn, [nick], limit=10 ** 9, newest_first=True)
     return {
         "nick": nick,
         "comments": comments[:limit],
@@ -1183,19 +1183,33 @@ def get_persona(conn, persona_id: int, limit: int = 3000) -> dict | None:
     nicks = [a["nick"] for a in p["alias_rows"]]
     p["aliases"] = nicks
     p.update(_persona_totals(conn, nicks))
-    p["comments_list"] = comments_for_nicks(conn, nicks, limit=limit)
+    p["comments_list"] = comments_for_nicks(conn, nicks, limit=limit,
+                                            newest_first=True)
     return p
 
 
-def comments_for_nicks(conn, nicks: list[str], limit: int = 3000) -> list[dict]:
-    """Merged comment history across several nicknames, oldest first."""
+def comments_for_nicks(conn, nicks: list[str], limit: int = 3000,
+                       newest_first: bool = False) -> list[dict]:
+    """Merged comment history across several nicknames, oldest first.
+
+    `newest_first` is not only a display choice. When someone has written more
+    than `limit` comments it decides which end of their history survives the
+    cut, and a reader opening a page wants what that person has been writing
+    lately -- so the views that show a person pass it, while the analysis
+    passes that read the whole history keep the reading order they had.
+
+    Undated comments sort last whichever way the dated ones run: they are the
+    captures whose timestamp we never recovered, and putting them first would
+    spend the whole budget on them.
+    """
     if not nicks:
         return []
     with conn.cursor() as cur:
         cur.execute("""
             SELECT DISTINCT ON (c.id)
                    c.id, c.article_id, c.author_nick, cs.posted_at, cs.body_text,
-                   cs.like_count, s.headline, j.slug AS journal, a.origin
+                   cs.like_count, s.headline, j.slug AS journal, a.origin,
+                   a.canonical_url
             FROM comment c
             JOIN comment_snapshot cs ON cs.comment_id = c.id
             JOIN article a ON a.id = c.article_id
@@ -1208,8 +1222,10 @@ def comments_for_nicks(conn, nicks: list[str], limit: int = 3000) -> list[dict]:
             ORDER BY c.id, cs.fetched_at DESC
         """, (nicks,))
         rows = _rows(cur)
-    rows.sort(key=lambda c: (c["posted_at"] is None, c["posted_at"]))
-    return rows[:limit]
+    dated = [c for c in rows if c["posted_at"] is not None]
+    undated = [c for c in rows if c["posted_at"] is None]
+    dated.sort(key=lambda c: c["posted_at"], reverse=newest_first)
+    return (dated + undated)[:limit]
 
 
 def create_persona(conn, *, label: str, note: str | None = None,

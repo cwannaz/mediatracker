@@ -531,7 +531,14 @@ class Server:
                       reference_coverage=nicknames.coverage(
                           r["nick"] for r in rows), **extra)
         if cmd == "get_commenter":
-            return ok(cmd, **db.get_commenter(self.conn, msg["nick"], limit=limit))
+            # One person's whole history, not a page of a browse list: the
+            # 1000-row browse cap above would cut the busiest 720 nicknames
+            # (the top one has 31,165 comments), and the page filters and
+            # sorts what it is given, so a cut here is invisible and reads as
+            # "this person stopped writing". The cap is a guard, not a page.
+            return ok(cmd, **db.get_commenter(
+                self.conn, msg["nick"],
+                limit=min(int(msg.get("limit") or 50_000), 50_000)))
         if cmd == "browse_authors":
             return ok(cmd, authors=db.browse_authors(self.conn, limit=limit))
         if cmd == "browse_sources":
