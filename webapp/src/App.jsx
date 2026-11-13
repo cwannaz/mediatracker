@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useDaemon } from './useDaemon.js'
 import { useRoute, useSubRoute } from './route.js'
+import { useScrollMemory } from './scrollmemory.js'
 import DataSources from './DataSources.jsx'
 import DeveloperLogos from './DeveloperLogos.jsx'
 import Browser from './Browser.jsx'
@@ -28,6 +29,8 @@ export default function App() {
   // view of ours rather than on whatever the tab held before.
   useEffect(() => { if (path[0] !== tab) navigate([tab], { replace: true }) }, [path, tab, navigate])
   const [sub, go, goBack] = useSubRoute(path, navigate, back, 1)
+  // Coming back from a detail view lands where the list was left.
+  useScrollMemory(path.join('/'))
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('mt-theme') || 'dark' } catch { return 'dark' }
   })

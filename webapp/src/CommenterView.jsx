@@ -6,6 +6,7 @@ import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
 import ActivityTimeline, { useCorpusSpan, useCoverage } from './ActivityTimeline.jsx'
 import CommentList from './CommentList.jsx'
+import SectionRail from './SectionRail.jsx'
 
 const fmtD = (v) => { try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
 
@@ -38,6 +39,7 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
   // Read from the values, not from where they sit in the array: the history
   // arrives newest-first so the ends are not where first/last used to be, and
   // the list below re-sorts it anyway.
+  const sections = SECTIONS
   const span2 = dated.reduce((acc, c) => ({
     first: !acc.first || c.posted_at < acc.first ? c.posted_at : acc.first,
     last: !acc.last || c.posted_at > acc.last ? c.posted_at : acc.last,
@@ -50,59 +52,88 @@ export default function CommenterView({ nick, send, onBack, onArticle, onPersona
       <div className="panel-head"><h1>{nick}</h1>
         <span className="slug">{data.total} comments</span></div>
 
-      <Identity nick={nick} data={data} send={send} reload={load}
-        picked={picked} setPicked={setPicked} busy={busy} setBusy={setBusy}
-        onPersona={onPersona} />
+      <div className="railed">
+        <SectionRail sections={sections} />
+        <div>
+          <section id="sec-identity">
+            <Identity nick={nick} data={data} send={send} reload={load}
+              picked={picked} setPicked={setPicked} busy={busy} setBusy={setBusy}
+              onPersona={onPersona} />
+          </section>
 
-      <Notes nick={nick} send={send} />
-      <Accounts nick={nick} send={send} />
+          <section id="sec-notes"><Notes nick={nick} send={send} /></section>
+          <section id="sec-elsewhere"><Accounts nick={nick} send={send} /></section>
 
-      <div className="card">
-        <h2>Metadata</h2>
-        <div className="metrics">
-          <Metric k="Comments" v={data.total} />
-          <Metric k="Articles" v={new Set(comments.map((c) => c.article_id)).size} />
-          <Metric k="Journals" v={journals.join(', ') || '—'} />
-          <Metric k="First seen" v={dated.length ? fmtD(span2.first) : '—'} />
-          <Metric k="Last seen" v={dated.length ? fmtD(span2.last) : '—'} />
-          <Metric k="Votes received" v={votes || '—'} />
-        </div>
-      </div>
+          <section id="sec-metadata" className="card">
+            <h2>Metadata</h2>
+            <div className="metrics">
+              <Metric k="Comments" v={data.total} />
+              <Metric k="Articles" v={new Set(comments.map((c) => c.article_id)).size} />
+              <Metric k="Journals" v={journals.join(', ') || '—'} />
+              <Metric k="First seen" v={dated.length ? fmtD(span2.first) : '—'} />
+              <Metric k="Last seen" v={dated.length ? fmtD(span2.last) : '—'} />
+              <Metric k="Votes received" v={votes || '—'} />
+            </div>
+          </section>
 
-      <ActivityTimeline comments={comments} span={span} coverage={coverage}
-        title="Timeline — comments per month" />
+          <section id="sec-timeline">
+            <ActivityTimeline comments={comments} span={span} coverage={coverage}
+              title="Timeline — comments per month" />
+          </section>
 
-      <div className="card">
-        <h2>Analysis</h2>
-        <div className="metrics">
-          <Metric k="Avg words / comment" v={metrics.avgWords} />
-          <Metric k="Avg sentence length" v={metrics.avgSentence} />
-          <Metric k="Vocabulary richness" v={metrics.ttr} />
-          <Metric k="Accented-word rate" v={metrics.accentRate} />
-          <Metric k="ALL-CAPS words" v={metrics.capsRate} />
-          <Metric k="Exclamations / comment" v={metrics.exclam} />
-        </div>
-        <p className="subtle" style={{ marginTop: 12 }}>
-          Computed from {withText.length} comment{withText.length === 1 ? '' : 's'} with recoverable text.
-          These are descriptive style measures, not a mastery score.
-        </p>
-      </div>
-
-      {data.persona
-        ? <div className="card">
-            <h2>Profile</h2>
-            <p className="subtle">
-              This nickname belongs to {data.persona.label}; the profile is built on
-              that person's whole body of writing.
+          <section id="sec-style" className="card">
+            <h2>Analysis</h2>
+            <div className="metrics">
+              <Metric k="Avg words / comment" v={metrics.avgWords} />
+              <Metric k="Avg sentence length" v={metrics.avgSentence} />
+              <Metric k="Vocabulary richness" v={metrics.ttr} />
+              <Metric k="Accented-word rate" v={metrics.accentRate} />
+              <Metric k="ALL-CAPS words" v={metrics.capsRate} />
+              <Metric k="Exclamations / comment" v={metrics.exclam} />
+            </div>
+            <p className="subtle" style={{ marginTop: 12 }}>
+              Computed from {withText.length} comment{withText.length === 1 ? '' : 's'} with recoverable text.
+              These are descriptive style measures, not a mastery score.
             </p>
-          </div>
-        : <ProfilePanel nick={nick} send={send} />}
-      <PrivateDetails nick={nick} send={send} />
+          </section>
 
-      <CommentList comments={comments} journals={journals} onArticle={onArticle} />
+          <section id="sec-profile">
+            {data.persona
+              ? <div className="card">
+                  <h2>Profile</h2>
+                  <p className="subtle">
+                    This nickname belongs to {data.persona.label}; the profile is built on
+                    that person's whole body of writing.
+                  </p>
+                </div>
+              : <ProfilePanel nick={nick} send={send} />}
+          </section>
+
+          <section id="sec-private"><PrivateDetails nick={nick} send={send} /></section>
+
+          <section id="sec-comments">
+            <CommentList comments={comments} journals={journals} onArticle={onArticle} />
+          </section>
+        </div>
+      </div>
     </>
   )
 }
+
+// Stable, and declared rather than discovered: a card that is still loading
+// has no heading yet, and a rail that grew entries as the page filled would
+// move under the cursor.
+const SECTIONS = [
+  { id: 'sec-identity', label: 'Identity' },
+  { id: 'sec-notes', label: 'Notes' },
+  { id: 'sec-elsewhere', label: 'Elsewhere' },
+  { id: 'sec-metadata', label: 'Metadata' },
+  { id: 'sec-timeline', label: 'Timeline' },
+  { id: 'sec-style', label: 'Analysis' },
+  { id: 'sec-profile', label: 'Profile' },
+  { id: 'sec-private', label: 'Private details' },
+  { id: 'sec-comments', label: 'Comments' },
+]
 
 function Metric({ k, v }) {
   return <div className="metric"><div className="v">{v}</div><div className="k">{k}</div></div>

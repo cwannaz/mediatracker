@@ -6,6 +6,7 @@ import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
 import ActivityTimeline, { useCorpusSpan, useCoverage } from './ActivityTimeline.jsx'
 import CommentList from './CommentList.jsx'
+import SectionRail from './SectionRail.jsx'
 
 const fmtD = (v) => { if (!v) return '—'; try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
 
@@ -62,7 +63,10 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
       </div>
       {p.note && <p className="subtle">{p.note}</p>}
 
-      <div className="card">
+      <div className="railed">
+        <SectionRail sections={SECTIONS} />
+        <div>
+      <section id="sec-aliases" className="card">
         <h2>Aliases</h2>
         <div className="table-wrap"><table>
           <thead><tr>
@@ -87,12 +91,12 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
             })}
           </tbody>
         </table></div>
-      </div>
+      </section>
 
-      <Notes personaId={personaId} send={send} />
-      <Accounts personaId={personaId} send={send} />
+      <section id="sec-notes"><Notes personaId={personaId} send={send} /></section>
+      <section id="sec-elsewhere"><Accounts personaId={personaId} send={send} /></section>
 
-      <div className="card">
+      <section id="sec-metadata" className="card">
         <h2>Merged metadata</h2>
         <div className="metrics">
           <Metric k="Comments" v={p.comments} />
@@ -102,12 +106,14 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
           <Metric k="Last seen" v={fmtD(p.last_seen)} />
           <Metric k="Votes received" v={p.total_votes ?? '—'} />
         </div>
-      </div>
+      </section>
 
-      <ActivityTimeline comments={comments} span={span} coverage={coverage}
-        title="Timeline — comments per month" />
+      <section id="sec-timeline">
+        <ActivityTimeline comments={comments} span={span} coverage={coverage}
+          title="Timeline — comments per month" />
+      </section>
 
-      <div className="card">
+      <section id="sec-style" className="card">
         <h2>Analysis (merged)</h2>
         <div className="metrics">
           <Metric k="Avg words / comment" v={metrics.avgWords} />
@@ -120,16 +126,33 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
         <p className="subtle" style={{ marginTop: 12 }}>
           Computed over {withText.length} comments from all aliases.
         </p>
+      </section>
+
+      <section id="sec-profile"><ProfilePanel personaId={personaId} send={send} /></section>
+      <section id="sec-private"><PrivateDetails personaId={personaId} send={send} /></section>
+
+      <section id="sec-comments">
+        <CommentList comments={comments} journals={journals}
+          onArticle={onArticle} showNick />
+      </section>
+        </div>
       </div>
-
-      <ProfilePanel personaId={personaId} send={send} />
-      <PrivateDetails personaId={personaId} send={send} />
-
-      <CommentList comments={comments} journals={journals}
-        onArticle={onArticle} showNick />
     </>
   )
 }
+
+// Declared rather than discovered, and stable: see the note in SectionRail.
+const SECTIONS = [
+  { id: 'sec-aliases', label: 'Aliases' },
+  { id: 'sec-notes', label: 'Notes' },
+  { id: 'sec-elsewhere', label: 'Elsewhere' },
+  { id: 'sec-metadata', label: 'Merged metadata' },
+  { id: 'sec-timeline', label: 'Timeline' },
+  { id: 'sec-style', label: 'Analysis' },
+  { id: 'sec-profile', label: 'Profile' },
+  { id: 'sec-private', label: 'Private details' },
+  { id: 'sec-comments', label: 'Comments' },
+]
 
 function Metric({ k, v }) {
   return <div className="metric"><div className="v">{v}</div><div className="k">{k}</div></div>

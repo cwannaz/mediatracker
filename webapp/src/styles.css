@@ -646,3 +646,24 @@ tr.rowlink.on td { background: var(--surface-2); }
 .entpill .entkind { color: var(--accent); }
 .entx { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: .8rem; padding: 0 .1rem; }
 .entx:hover { color: var(--text); }
+
+/* ---- a page's own sections, kept beside it while it scrolls ---- */
+/* The rail sticks below the two bars that are already sticky: the top bar
+   (52px) and the subtab row under it. */
+.railed { display: grid; grid-template-columns: 168px minmax(0, 1fr);
+  gap: 26px; align-items: start; }
+.rail { position: sticky; top: 104px; align-self: start;
+  display: flex; flex-direction: column; gap: 1px; }
+.railitem { text-align: left; padding: 5px 9px; border: 0; border-left: 2px solid transparent;
+  background: transparent; color: var(--muted); font-size: 12.5px; line-height: 1.35;
+  border-radius: 0 4px 4px 0; }
+.railitem:hover { color: var(--text); background: var(--surface-2); }
+.railitem.on { color: var(--text); border-left-color: var(--accent); font-weight: 550; }
+/* Anchored sections must clear the sticky chrome when jumped to. */
+.railed [id] { scroll-margin-top: 104px; }
+
+/* Narrow: the rail would eat the column the comments need. */
+@media (max-width: 1040px) {
+  .railed { grid-template-columns: minmax(0, 1fr); }
+  .rail { display: none; }
+}
