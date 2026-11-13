@@ -19,7 +19,7 @@ from functools import partial
 import websockets
 
 from . import (alias_candidates, anagrams, api, blobserver, ccapi, coverage, db, disclosures,
-               entities, handles, profiling, search, stance, thumbs,
+               entities, fetch, handles, profiling, search, stance, thumbs,
                ids, newcomers, nicknames, proximity, sources)
 from .config import Config, load_config
 from .fetch import Fetcher
@@ -295,6 +295,25 @@ class Server:
                 return
             run_id = self.engine.enqueue(slug, "manual")
             await ws.send(ok(cmd, journal=slug, run_id=run_id, queued=self.engine.queue.qsize()))
+
+        elif cmd == "reabsorb_article":
+            aid = msg.get("article_id")
+            if not aid:
+                await ws.send(error(cmd, "article_id is required"))
+                return
+            if self.engine is None:
+                await ws.send(error(cmd, "degraded: the scan engine is not running"))
+                return
+            # Awaited, not queued: it is seconds of work and the reader is
+            # watching for the answer. Other connections keep being served --
+            # this is the same event loop, and the fetch itself is a thread.
+            try:
+                await ws.send(ok(cmd, **await self.engine.reabsorb(aid)))
+            except (ValueError, fetch.Paused) as exc:
+                await ws.send(error(cmd, str(exc)))
+            except Exception as exc:
+                log.warning("re-absorbing %s failed: %s", aid, exc)
+                await ws.send(error(cmd, f"{type(exc).__name__}: {exc}"))
 
         elif cmd == "scan_status":
             await ws.send(ok("scan_status",
@@ -742,7 +761,12 @@ class Server:
                 rows, field="label", aliases="aliases"),
                 reference_coverage=nicknames.coverage(r["label"] for r in rows))
         if cmd == "get_persona":
-            p = db.get_persona(self.conn, int(msg["persona_id"]), limit=limit or 3000)
+            # A person's merged history, under the same rule as one nickname's
+            # (see get_commenter): the page filters what it is given, so the
+            # browse cap would hide a persona's recent writing behind its
+            # oldest alias. Several nicknames merge, so it can only be longer.
+            p = db.get_persona(self.conn, int(msg["persona_id"]),
+                               limit=min(int(msg.get("limit") or 50_000), 50_000))
             return ok(cmd, persona=p) if p else error(cmd, "persona not found")
         if cmd == "create_persona":
             pid = db.create_persona(self.conn, label=msg["label"], note=msg.get("note"),

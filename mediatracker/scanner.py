@@ -121,6 +121,45 @@ class ScanEngine:
                  slug, trigger, run_id, self.queue.qsize())
         return run_id
 
+    async def reabsorb(self, article_id: str) -> dict:
+        """Read one article again, now, because a reader asked for it.
+
+        Runs here rather than on its own fetcher so it shares this engine's
+        per-host delay: a click while a scan is running must wait its turn in
+        the same queue the crawl politely keeps, not open a second tap on the
+        same site.
+
+        It is not queued either. One article is a page and its thread, seconds
+        of work, and the reader is looking at the result -- where a scan is
+        thousands of pages that nobody waits for.
+        """
+        if self.conn is None:
+            raise ValueError("Postgres unavailable")
+        row = db.article_source(self.conn, article_id)
+        if row is None:
+            raise ValueError(f"unknown article {article_id!r}")
+        slug, url = row["slug"], row["canonical_url"]
+        if sources.get(slug) is None:
+            raise ValueError(f"unknown journal {slug!r}")
+        fetch.check_not_paused(f"re-reading an article of {slug}")
+
+        pipeline = Pipeline(conn=self.conn, blobs=self.blobs,
+                            store=self.store, fetcher=self.fetcher)
+        stats = await pipeline.ingest_one(self.source_instance(slug), url)
+        out = {
+            "journal": slug, "url": url,
+            "article_snapshots": stats.article_snapshots,
+            "comments_seen": stats.comments_seen,
+            "comment_snapshots": stats.comment_snapshots,
+            "images_new": stats.images_new,
+            "errors": stats.errors,
+            # An article the title has taken down parses as nothing and is
+            # marked gone; saying so is more use than reporting zero changes.
+            "gone": stats.articles_seen == 0,
+        }
+        log.info("[%s] re-absorbed %s: %s", slug, article_id, out)
+        return out
+
     # ------------------------------------------------------------------ #
     # worker
     # ------------------------------------------------------------------ #

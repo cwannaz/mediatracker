@@ -5,8 +5,8 @@ import PrivateDetails from './PrivateDetails.jsx'
 import Notes from './Notes.jsx'
 import Accounts from './Accounts.jsx'
 import ActivityTimeline, { useCorpusSpan, useCoverage } from './ActivityTimeline.jsx'
+import CommentList from './CommentList.jsx'
 
-const fmt = (v) => { try { return new Date(v).toLocaleString() } catch { return String(v) } }
 const fmtD = (v) => { if (!v) return '—'; try { return new Date(v).toLocaleDateString() } catch { return String(v) } }
 
 // A persona is one person behind several nicknames. Everything here is the
@@ -14,9 +14,9 @@ const fmtD = (v) => { if (!v) return '—'; try { return new Date(v).toLocaleDat
 export default function PersonaView({ personaId, send, onBack, onNick, onArticle }) {
   const [p, setP] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [shown, setShown] = useState(150)
 
-  const load = () => send('get_persona', { persona_id: personaId, limit: 3000 })
+  // The whole merged history, so the filters act on all of it.
+  const load = () => send('get_persona', { persona_id: personaId, limit: 50000 })
     .then((r) => { if (r.ok) setP(r.persona) }).catch(() => {})
   useEffect(() => { load() }, [personaId]) // eslint-disable-line
 
@@ -125,30 +125,8 @@ export default function PersonaView({ personaId, send, onBack, onNick, onArticle
       <ProfilePanel personaId={personaId} send={send} />
       <PrivateDetails personaId={personaId} send={send} />
 
-      <div className="card">
-        <h2>Comments ({comments.length})</h2>
-        {comments.slice(0, shown).map((c) => (
-          <div className="comment" key={c.id}>
-            <div className="head">
-              <span className="when">{c.posted_at ? fmt(c.posted_at) : 'date unknown'}</span>
-              <span className="chip">{c.author_nick}</span>
-              <span className="nick" style={{ fontWeight: 400 }} onClick={() => onArticle?.(c.article_id)}>
-                {c.headline || '(article)'}
-              </span>
-              <span className="votes">{c.like_count != null ? `${c.like_count} votes` : ''}</span>
-            </div>
-            {c.body_text
-              ? <div className="text">{c.body_text}</div>
-              : <div className="text missing">[body not recoverable]</div>}
-          </div>
-        ))}
-        {comments.length > shown && (
-          <button className="btn secondary" style={{ marginTop: 12 }}
-            onClick={() => setShown((n) => n + 300)}>
-            Show more ({comments.length - shown} remaining)
-          </button>
-        )}
-      </div>
+      <CommentList comments={comments} journals={journals}
+        onArticle={onArticle} showNick />
     </>
   )
 }

@@ -156,6 +156,18 @@ class Pipeline:
                 "community": source.community_key,
             })
 
+    async def ingest_one(self, source: Source, url: str) -> IngestStats:
+        """Read a single article again, thread and all, and say what changed.
+
+        Never takes the comment-count shortcut a rescan takes. The reason to
+        ask for one article is usually that its thread has moved on in a way
+        the count does not show -- hundreds of votes on comments we already
+        hold -- and `_thread_unchanged` would skip exactly that case.
+        """
+        stats = IngestStats()
+        await self._ingest_article(source, url, stats, is_rescan=False)
+        return stats
+
     async def _ingest_article(self, source: Source, url: str, stats: IngestStats,
                               *, is_rescan: bool = False) -> None:
         article = await source.fetch_article(self.fetcher, url)

@@ -935,6 +935,22 @@ def window_journal_counts(conn, since: date | None = None,
         return _rows(cur)
 
 
+def article_source(conn, article_id: str) -> dict | None:
+    """Which title an article belongs to and the url to read it at again.
+
+    The article id is a hash of the two, so it cannot be taken apart: reading
+    one again means asking the corpus where it came from.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.slug, a.canonical_url, a.gone_at
+            FROM article a JOIN journal j ON j.id = a.journal_id
+            WHERE a.id = %s
+        """, (article_id,))
+        rows = _rows(cur)
+        return rows[0] if rows else None
+
+
 def get_article(conn, article_id: str, snapshot_id: int | None = None) -> dict | None:
     """One article with its chosen (default latest) snapshot, images and comments."""
     with conn.cursor() as cur:

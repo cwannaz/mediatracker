@@ -20,14 +20,39 @@ function localize(html, images) {
 export default function ArticleView({ articleId, send, onBack, onNick }) {
   const [art, setArt] = useState(null)
   const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [again, setAgain] = useState(null)
+
+  const load = (quiet = false) => {
+    if (!quiet) setArt(null)
+    return send('get_article', { article_id: articleId })
+      .then((r) => { r.ok ? setArt(r.article) : setErr(r.error) })
+      .catch((e) => setErr(String(e)))
+  }
 
   useEffect(() => {
     let alive = true
+    setAgain(null)
     send('get_article', { article_id: articleId })
       .then((r) => { if (!alive) return; r.ok ? setArt(r.article) : setErr(r.error) })
       .catch((e) => alive && setErr(String(e)))
     return () => { alive = false }
   }, [articleId, send])
+
+  // Read the article at the title again, now. A thread keeps moving after we
+  // stop watching it -- votes above all, which change without the comment
+  // count changing -- so this is the only way to bring one up to date without
+  // waiting for the crawl to come back round to it.
+  const reabsorb = () => {
+    setBusy(true); setAgain(null)
+    send('reabsorb_article', { article_id: articleId })
+      .then((r) => {
+        setAgain(r.ok ? r : { error: r.error })
+        if (r.ok) return load(true)      // keep the page in place while it refreshes
+      })
+      .catch((e) => setAgain({ error: String(e) }))
+      .finally(() => setBusy(false))
+  }
 
   if (err) return <><button className="backlink" onClick={onBack}>← Back</button><div className="empty">{err}</div></>
   if (!art) return <><button className="backlink" onClick={onBack}>← Back</button><div className="empty">Loading…</div></>
@@ -49,6 +74,29 @@ export default function ArticleView({ articleId, send, onBack, onNick }) {
     <>
       <button className="backlink" onClick={onBack}>← Back to articles</button>
       <article className="article">
+        <div className="toolbar">
+          {art.canonical_url?.startsWith('http') && (
+            <a className="btn secondary" href={art.canonical_url}
+               target="_blank" rel="noreferrer noopener"
+               title={art.canonical_url}>Open at {art.journal_name || 'the source'} ↗</a>
+          )}
+          <button className="btn" onClick={reabsorb} disabled={busy}
+                  title="Fetch the article and its whole thread again, and record what changed">
+            {busy ? 'Re-absorbing…' : 'Re-absorb'}
+          </button>
+          {again && (
+            <span className="subtle">
+              {again.error
+                ? again.error
+                : again.gone
+                  ? 'the title no longer serves this article; marked gone'
+                  : `${again.comment_snapshots} comment snapshot${again.comment_snapshots === 1 ? '' : 's'}, `
+                    + `${again.article_snapshots} article snapshot${again.article_snapshots === 1 ? '' : 's'}`
+                    + (again.images_new ? `, ${again.images_new} new image${again.images_new === 1 ? '' : 's'}` : '')
+                    + (again.comment_snapshots || again.article_snapshots ? '' : ' — nothing had changed')}
+            </span>
+          )}
+        </div>
         <h1>{art.headline || '(untitled)'}</h1>
         {art.subhead && <p className="lead">{art.subhead}</p>}
         <div className="byline">
