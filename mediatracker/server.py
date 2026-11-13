@@ -31,6 +31,21 @@ from .store import JsonlStore
 
 log = logging.getLogger(__name__)
 
+# The largest answer this daemon may put on the wire, incoming or outgoing.
+#
+# `websockets` defaults to 1 MiB and enforces it on BOTH directions: a bigger
+# answer is not truncated, it closes the connection with 1009 and the web app
+# reads that as "daemon offline". One person's whole comment history is the
+# answer that outgrows it -- measured on the live corpus, the busiest nickname
+# (31,165 comments) serializes to 18.4 MB and takes 2.3 s -- and that history
+# is what the commenter page filters in the browser, so it cannot be trimmed
+# without moving the filters onto the server.
+#
+# 64 MiB is therefore headroom over that measured worst case, not an
+# invitation: an answer anywhere near it means a query that should have been
+# paged.
+MAX_FRAME_BYTES = 64 * 1024 * 1024
+
 # How often the daemon folds newly crawled rows into the search index, and
 # how much it will do in one pass. The index is watermark-driven, so a
 # capped pass is not a partial result -- it just resumes at the next tick.
@@ -129,7 +144,8 @@ class Server:
         keeper = asyncio.create_task(self._index_keeper())
         summaries = asyncio.create_task(self._summary_keeper())
 
-        async with websockets.serve(self._handle, self.cfg.host, self.cfg.port):
+        async with websockets.serve(self._handle, self.cfg.host, self.cfg.port,
+                                    max_size=MAX_FRAME_BYTES):
             log.info("MediaTracker listening on ws://%s:%s (journals: %s)",
                      self.cfg.host, self.cfg.port, ", ".join(sources.all_slugs()) or "none")
             await asyncio.Future()  # run forever

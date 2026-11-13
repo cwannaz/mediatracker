@@ -88,3 +88,18 @@ def test_the_query_asks_for_the_canonical_url():
 
 def test_no_nicknames_is_not_a_query():
     assert db.comments_for_nicks(_conn([]), []) == []
+
+
+def test_the_frame_cap_clears_the_biggest_history_the_row_cap_allows():
+    """A 1 MiB frame closes the socket, and the web app calls that "offline".
+
+    `websockets` enforces its max_size in both directions, so an answer over
+    the cap is not truncated: the connection dies with 1009. Measured on the
+    live corpus, the busiest nickname's 31,165 comments serialize to 18.4 MB,
+    which is why the default could not stand once the whole history was sent.
+    """
+    from mediatracker import server as sv
+
+    assert sv.MAX_FRAME_BYTES > 20 * 1024 * 1024      # over the measured worst case
+    import inspect
+    assert "max_size=MAX_FRAME_BYTES" in inspect.getsource(sv.Server.run)
