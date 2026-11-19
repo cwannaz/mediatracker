@@ -27,7 +27,7 @@ import time
 import urllib.error
 from dataclasses import dataclass
 
-from . import fetch, ids
+from . import db, fetch, ids
 from .archive_body import (extract_body, extract_body_portal,
                            looks_like_portal)
 from .archive_parse import looks_like_newsnetz
@@ -249,13 +249,19 @@ def run(conn, *, client: WaybackClient, journal: str | None = None,
         min_capture: str | None = None, retry_failed: bool = False,
         progress=None) -> dict:
     """Fetch and store bodies until the list, the budget or the archive ends."""
-    rows = candidates(conn, journal=journal, limit=limit, min_capture=min_capture,
-                      retry_failed=retry_failed)
+    # Both reads are retried: at boot this stint starts in the same second as
+    # the daemon, whose ensure_schema takes the same tables in the opposite
+    # order, and the loser of that race is always this one.
+    rows = db.retrying_on_lock(
+        lambda: candidates(conn, journal=journal, limit=limit,
+                           min_capture=min_capture, retry_failed=retry_failed),
+        what="the backfill queue")
     log.info("body backfill: %d snapshots to attempt%s",
              len(rows), f" ({journal})" if journal else "")
     st = Stats()
     deadline = time.time() + max_hours * 3600 if max_hours else None
-    control = control_capture(conn, journal=journal)
+    control = db.retrying_on_lock(lambda: control_capture(conn, journal=journal),
+                                  what="the control capture")
 
     for snap_id, aid, slug, capture, captured_url, canonical, headline, ccount in rows:
         if deadline and time.time() > deadline:
@@ -345,7 +351,6 @@ def run(conn, *, client: WaybackClient, journal: str | None = None,
 
 def main(argv=None) -> int:
     import argparse
-    from . import db
     from .config import load_config
 
     p = argparse.ArgumentParser(prog="mediatracker.body_backfill")

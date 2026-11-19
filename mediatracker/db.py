@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -145,6 +146,60 @@ def connect(cfg) -> "psycopg.Connection | None":
     except Exception as exc:  # broad: any failure means "run degraded"
         log.warning("could not connect to Postgres (%s); running degraded", exc)
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Losing a lock race
+# --------------------------------------------------------------------------- #
+
+# How long a reader keeps asking after Postgres picks it as the deadlock
+# victim. Six tries over roughly half a minute: long enough to outlast
+# ensure_schema on this corpus (2.6 s at the 2026-11-19 boot), short enough
+# that a real standoff ends the run instead of hanging it.
+LOCK_ATTEMPTS = 6
+LOCK_FIRST_WAIT = 0.5
+
+
+def retrying_on_lock(fn, *, what: str = "a query",
+                     attempts: int | None = None,
+                     first_wait: float | None = None):
+    """Run a read again when Postgres kills it to break a deadlock.
+
+    A deadlock is not a fault in either statement. It is two of them taking
+    the same tables in opposite orders, and Postgres ends it by killing one --
+    after which the survivor finishes and the tables are free. The victim's
+    only correct response is to ask again a moment later.
+
+    This is what the body backfill meets at every boot. It reads
+    article_snapshot and then joins journal; the daemon's ensure_schema takes
+    journal and then article_snapshot; systemd starts both in the same second.
+    The backfill loses, and with Restart=no the night's stint is simply gone.
+
+    Only for work that can be repeated whole: a read, or a write that has not
+    begun. Connections here are autocommit, so a killed statement leaves
+    nothing half-done behind it.
+    """
+    if psycopg is None:
+        return fn()
+    # Read at call time, not bound as defaults: the constants above are the
+    # setting, and a default argument would freeze a copy of them at import.
+    attempts = LOCK_ATTEMPTS if attempts is None else attempts
+    wait = LOCK_FIRST_WAIT if first_wait is None else first_wait
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except (psycopg.errors.DeadlockDetected,
+                psycopg.errors.LockNotAvailable) as exc:
+            if attempt == attempts:
+                log.error("%s lost the lock race %d times; giving up",
+                          what, attempts)
+                raise
+            log.warning("%s lost a lock race (%s); asking again in %.1fs "
+                        "(attempt %d of %d)",
+                        what, type(exc).__name__, wait, attempt, attempts)
+            time.sleep(wait)
+            wait *= 2
+    raise AssertionError("unreachable")
 
 
 # --------------------------------------------------------------------------- #
