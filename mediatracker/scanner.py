@@ -152,6 +152,7 @@ class ScanEngine:
             "comments_seen": stats.comments_seen,
             "comment_snapshots": stats.comment_snapshots,
             "images_new": stats.images_new,
+            "avatars_new": stats.avatars_new,
             "errors": stats.errors,
             # An article the title has taken down parses as nothing and is
             # marked gone; saying so is more use than reporting zero changes.
@@ -207,6 +208,7 @@ class ScanEngine:
             "threads_skipped": stats.threads_skipped,
             "comment_snapshots": stats.comment_snapshots,
             "images_new": stats.images_new,
+            "avatars_new": stats.avatars_new,
             "errors": stats.errors,
         }
         self.last_stats[req.slug] = {**result, "status": status,

@@ -515,6 +515,43 @@ CREATE INDEX IF NOT EXISTS subject_account_subject_idx
     ON subject_account (community, subject_kind, subject_key);
 CREATE INDEX IF NOT EXISTS subject_account_platform_idx
     ON subject_account (platform);
+
+-- Which picture a nickname was wearing, and when it changed.
+--
+-- The comment API hands us an avatar with every comment and we threw it away
+-- for two years. It is worth keeping for one reason above all: an uploaded
+-- picture is unique to the account that uploaded it, so it survives a rename.
+-- A commenter who changes nickname and keeps the picture is identified
+-- outright, where stylometry can only nominate candidates.
+--
+-- Three populations, and only one of them identifies anybody (see
+-- avatars.classify): the default placeholder everybody starts with, a small
+-- palette of presets many accounts share, and a genuinely uploaded file whose
+-- name is a hash of its own bytes. `kind` keeps them apart so a query never
+-- mistakes 'everyone who left the placeholder on' for a link between people.
+--
+-- One row per (title, nickname, picture): a nickname that changes its picture
+-- gains a row rather than overwriting one, which is what makes the pair of
+-- dates a history. Keyed by title and not by community because that is the
+-- provenance -- whether two titles' commenters are one public is a question
+-- asked of this table, not an assumption built into it.
+CREATE TABLE IF NOT EXISTS author_avatar (
+    journal_id  TEXT NOT NULL REFERENCES journal(id),
+    author_nick TEXT NOT NULL,
+    avatar_key  TEXT NOT NULL,   -- the file's own identity, extension dropped
+    kind        TEXT NOT NULL,   -- 'uploaded' | 'preset' | 'default' | 'other'
+    orig_url    TEXT NOT NULL,
+    first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (journal_id, author_nick, avatar_key)
+);
+-- The succession query reads this: every nickname that has worn one uploaded
+-- picture. Partial, because the placeholder would otherwise index 180,000
+-- nicknames under one key and answer nothing.
+CREATE INDEX IF NOT EXISTS author_avatar_uploaded_idx
+    ON author_avatar (avatar_key) WHERE kind = 'uploaded';
+CREATE INDEX IF NOT EXISTS author_avatar_nick_idx
+    ON author_avatar (author_nick);
 """
 
 
@@ -650,6 +687,94 @@ def upsert_comment(conn, *, cid: str, article_id: str, source_key: str | None,
             """,
             (cid, article_id, source_key, parent_id, author_nick, author_key),
         )
+
+
+def record_avatars(conn, *, journal_id: str,
+                   pairs: dict[str, tuple[str, str, str]]) -> int:
+    """Note which picture each nickname of a thread was wearing just now.
+
+    A nickname keeping the same picture only moves `last_seen`. A nickname
+    wearing a different one gains a row, and the two rows' dates are then the
+    history: when the old picture was last seen and when the new one first was.
+
+    Returns how many pictures were seen here for the first time, which is the
+    number worth reporting -- on a rescan of an old thread it is normally 0.
+    """
+    if not pairs:
+        return 0
+    new = 0
+    with conn.cursor() as cur:
+        for nick, (kind, key, url) in pairs.items():
+            cur.execute("""
+                INSERT INTO author_avatar
+                    (journal_id, author_nick, avatar_key, kind, orig_url)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (journal_id, author_nick, avatar_key)
+                DO UPDATE SET last_seen = now()
+                RETURNING (first_seen = last_seen) AS is_new
+            """, (journal_id, nick, key, kind, url))
+            row = cur.fetchone()
+            if row and row[0]:
+                new += 1
+    return new
+
+
+def avatar_history(conn, nick: str) -> list[dict]:
+    """Every picture one nickname has worn, newest last seen first."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.slug AS journal, a.avatar_key, a.kind, a.orig_url,
+                   a.first_seen, a.last_seen
+            FROM author_avatar a JOIN journal j ON j.id = a.journal_id
+            WHERE a.author_nick = %s
+            ORDER BY a.last_seen DESC
+        """, (nick,))
+        return _rows(cur)
+
+
+def avatar_sharers(conn, avatar_key: str) -> list[dict]:
+    """Every nickname that has worn one picture, earliest first.
+
+    For an uploaded picture this is the succession list: the same file under
+    two nicknames is one account that renamed, because nobody else can serve
+    that file. For a preset or the placeholder it is a crowd and means nothing,
+    which is why `kind` travels with every row rather than being filtered out
+    here -- the caller must be able to see which of the two it is holding.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT a.author_nick, j.slug AS journal, a.kind,
+                   a.first_seen, a.last_seen
+            FROM author_avatar a JOIN journal j ON j.id = a.journal_id
+            WHERE a.avatar_key = %s
+            ORDER BY a.first_seen
+        """, (avatar_key,))
+        return _rows(cur)
+
+
+def avatar_successions(conn, *, min_gap_days: float = 0.0,
+                       limit: int = 200) -> list[dict]:
+    """Uploaded pictures that have been worn by more than one nickname.
+
+    Each row is one account that renamed, or shared a login. Only `uploaded`
+    pictures qualify: a preset is a palette choice and the placeholder is the
+    default, and neither says two nicknames are one person.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT a.avatar_key,
+                   count(DISTINCT a.author_nick) AS nicknames,
+                   min(a.first_seen) AS first_seen,
+                   max(a.last_seen)  AS last_seen,
+                   array_agg(DISTINCT a.author_nick) AS nicks
+            FROM author_avatar a
+            WHERE a.kind = 'uploaded'
+            GROUP BY a.avatar_key
+            HAVING count(DISTINCT a.author_nick) > 1
+            ORDER BY max(a.last_seen) DESC
+            LIMIT %s
+        """, (limit,))
+        return _rows(cur)
 
 
 def insert_comment_snapshot(conn, *, comment_id: str, content_hash: str,

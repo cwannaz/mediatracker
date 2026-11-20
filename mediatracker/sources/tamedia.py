@@ -290,7 +290,11 @@ def parse_comments(payload: dict) -> tuple[list[ParsedComment], int | None]:
         out.append(ParsedComment(
             source_key=str(node.get("id")) if node.get("id") is not None else None,
             author_nick=node.get("authorNickname"),
-            author_key=None,  # only a nickname/avatar are exposed, no stable user id
+            # No user id is exposed -- but the avatar nearly is one. An
+            # uploaded picture is unique to the account and survives a rename,
+            # which is the only handle this API gives on a renamed commenter.
+            author_key=None,
+            avatar_url=(node.get("authorAvatar") or {}).get("light"),
             body_text=node.get("body"),
             parent_source_key=node.get("parentCommentId") or parent_key,
             posted_at=_parse_dt(node.get("createdAt")),

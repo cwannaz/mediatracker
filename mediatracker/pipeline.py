@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from . import db, ids
 from .fetch import Fetcher, FetchError
 from .images import BlobStore
+from . import avatars
 from .sources.base import ParsedArticle, ParsedComment, Source
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class IngestStats:
     threads_skipped: int = 0
     comment_snapshots: int = 0
     images_new: int = 0
+    avatars_new: int = 0
     errors: int = 0
 
 
@@ -200,10 +202,31 @@ class Pipeline:
         in_batch = {c.source_key for c in ordered if getattr(c, "source_key", None)}
         for c in ordered:
             self._write_comment(source, aid, c, stats, in_batch=in_batch)
+        self._write_avatars(jid, ordered, stats)
         # Recorded only after the thread was actually read, so a failed fetch
         # leaves the marker at its old value and the next scan tries again.
         if article.comment_count is not None and self.conn is not None:
             db.record_thread_count(self.conn, aid, article.comment_count)
+
+    def _write_avatars(self, jid: str, comments: list[ParsedComment], stats) -> None:
+        """Record which picture each author of this thread is wearing.
+
+        Collapsed to one row per nickname before it reaches Postgres: the
+        avatar repeats on every comment a person wrote, and a busy thread would
+        otherwise be a thousand upserts to learn two hundred facts.
+
+        Never fatal. This is an addition to what a scan has always collected,
+        and a thread that is otherwise stored correctly must not be lost
+        because a picture could not be filed.
+        """
+        if self.conn is None:
+            return
+        try:
+            pairs = avatars.pairs_of(comments)
+            stats.avatars_new += db.record_avatars(self.conn, journal_id=jid,
+                                                   pairs=pairs)
+        except Exception as exc:
+            log.warning("recording avatars failed: %s: %s", type(exc).__name__, exc)
 
     def _thread_unchanged(self, aid: str, article: ParsedArticle) -> bool:
         """True when the article page shows the same comment count as the last

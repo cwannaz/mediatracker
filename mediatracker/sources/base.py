@@ -53,6 +53,10 @@ class ParsedComment:
     body_html: str | None = None
     like_count: int | None = None
     reply_count: int | None = None
+    # The account's picture, as a url. Kept out of raw_meta because it is
+    # followed up on: an uploaded avatar is unique to the account and so
+    # outlives a change of nickname. See avatars.py.
+    avatar_url: str | None = None
     raw_meta: dict = field(default_factory=dict)
 
 

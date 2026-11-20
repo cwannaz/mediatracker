@@ -103,6 +103,7 @@ def test_it_runs_on_the_engine_fetcher_so_politeness_is_shared(monkeypatch):
                 comments_seen = 7
                 comment_snapshots = 7
                 images_new = 0
+                avatars_new = 0
                 errors = 0
             return _S()
 
@@ -128,6 +129,7 @@ def test_an_article_the_title_has_taken_down_is_reported_as_gone(monkeypatch):
                 comments_seen = 0
                 comment_snapshots = 0
                 images_new = 0
+                avatars_new = 0
                 errors = 0
             return _S()
 
