@@ -196,7 +196,11 @@ def progress(conn, *, journal: str = "lematin") -> dict:
         cur.execute("""
             SELECT count(*) AS planned,
                    count(*) FILTER (WHERE status = 'done') AS done,
-                   count(*) FILTER (WHERE status LIKE 'failed%') AS failed,
+                   -- The percent is doubled because this statement carries
+                   -- a parameter, and psycopg reads a single one as the start
+                   -- of a placeholder -- in a comment just as much as in SQL,
+                   -- which is how the first attempt at this line failed.
+                   count(*) FILTER (WHERE status LIKE 'failed%%') AS failed,
                    count(*) FILTER (WHERE status IS NULL) AS todo,
                    sum(new_nicks) FILTER (WHERE status IS NOT NULL) AS nicks_reached,
                    sum(new_nicks) AS nicks_planned
