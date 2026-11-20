@@ -563,6 +563,31 @@ CREATE INDEX IF NOT EXISTS author_avatar_nick_idx
 -- Kept per title as well as overall ('all'), because the identity question is
 -- asked inside one commenting community: a word 50 people use corpus-wide may
 -- be three people's habit on one title.
+-- The avatar sweep's work queue, so it survives a reboot.
+--
+-- Avatars exist only in the live API's answer, never in anything we stored, so
+-- recovering a history of them means re-reading threads. Two measurements
+-- shaped this queue. The comment API answers only for modern content ids:
+-- every id from 2008-2016 returns HTTP 500, which puts a floor under the whole
+-- exercise at November 2020. And the thing wanted is nicknames, not threads --
+-- so the queue is ordered by how many nicknames each thread would be the FIRST
+-- to show us, which reaches all 90,331 reachable nicknames in 10,190 threads
+-- instead of 47,463.
+--
+-- `rank` is that ordering, computed once. `new_nicks` is the marginal yield it
+-- was ordered on, kept so a later run can see whether the plan still holds.
+CREATE TABLE IF NOT EXISTS avatar_sweep (
+    article_id TEXT PRIMARY KEY REFERENCES article(id),
+    journal    TEXT NOT NULL,
+    rank       INTEGER NOT NULL,
+    new_nicks  INTEGER NOT NULL,
+    status     TEXT,            -- NULL while queued, then 'done' or 'failed:<why>'
+    nicks_seen INTEGER,
+    done_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS avatar_sweep_todo_idx
+    ON avatar_sweep (journal, rank) WHERE status IS NULL;
+
 CREATE TABLE IF NOT EXISTS marker_base_rate (
     marker      TEXT NOT NULL,
     scope       TEXT NOT NULL,   -- journal slug, or 'all'

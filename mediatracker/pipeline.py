@@ -10,10 +10,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from . import db, ids
+from . import avatars, db, ids
 from .fetch import Fetcher, FetchError
 from .images import BlobStore
-from . import avatars
 from .sources.base import ParsedArticle, ParsedComment, Source
 
 log = logging.getLogger(__name__)
@@ -157,6 +156,34 @@ class Pipeline:
                 "base_url": source.base_url, "comment_system": source.comment_system,
                 "community": source.community_key,
             })
+
+    async def refresh_thread(self, source: Source, aid: str,
+                             source_key: str, canonical_url: str) -> IngestStats:
+        """Read one article's thread again without re-fetching the article.
+
+        For the avatar sweep, where the thing wanted is which picture each
+        author is wearing now and the article's own text is irrelevant. Skipping
+        the article page halves the requests over 10,190 threads, which is the
+        difference between twenty-eight hours of polite crawling and fifty.
+
+        The comment pages are fetched either way, so their contents are written
+        in full rather than thrown away: a thread last read in 2022 usually has
+        votes that have moved since, and those arrive for free here.
+        """
+        stats = IngestStats()
+        # `fetch_comments` reads only `source_key` off the article; the rest of
+        # a ParsedArticle would be invented, and inventing it is how a stub
+        # ends up written to the corpus as though it were read.
+        stub = ParsedArticle(url=canonical_url, source_key=source_key)
+        comments = await self._safe_comments(source, stub)
+        if not comments:
+            return stats
+        ordered = _parents_first(comments)
+        in_batch = {c.source_key for c in ordered if getattr(c, "source_key", None)}
+        for c in ordered:
+            self._write_comment(source, aid, c, stats, in_batch=in_batch)
+        self._write_avatars(ids.journal_id(source.slug), ordered, stats)
+        return stats
 
     async def ingest_one(self, source: Source, url: str) -> IngestStats:
         """Read a single article again, thread and all, and say what changed.
