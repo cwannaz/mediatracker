@@ -552,6 +552,26 @@ CREATE INDEX IF NOT EXISTS author_avatar_uploaded_idx
     ON author_avatar (avatar_key) WHERE kind = 'uploaded';
 CREATE INDEX IF NOT EXISTS author_avatar_nick_idx
     ON author_avatar (author_nick);
+
+-- How common each out-group epithet actually is, measured on this corpus.
+--
+-- `mistakes.py` paid for this table. A narrow regex manufactures false rarity:
+-- it once made 27 handles look like a signature where the real base rate was
+-- 1,136. So no marker may be called rare from intuition -- `markers.rarity`
+-- reads this table and refuses to answer when the measurement is missing.
+--
+-- Kept per title as well as overall ('all'), because the identity question is
+-- asked inside one commenting community: a word 50 people use corpus-wide may
+-- be three people's habit on one title.
+CREATE TABLE IF NOT EXISTS marker_base_rate (
+    marker      TEXT NOT NULL,
+    scope       TEXT NOT NULL,   -- journal slug, or 'all'
+    writers     BIGINT NOT NULL, -- distinct nicknames that have used it
+    comments    BIGINT NOT NULL,
+    writers_tot BIGINT NOT NULL, -- the field it was measured against
+    measured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (marker, scope)
+);
 """
 
 
